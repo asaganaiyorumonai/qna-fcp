@@ -2,28 +2,41 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Q&A Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>フロンティアQ&A</title>
 
-  <!-- MSAL -->
-  <script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
+  <link rel="stylesheet" href="./app.css" />
 
-  <link rel="stylesheet" href="style.css" />
+  <!-- MSAL (Microsoft Entra / AAD) -->
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.20.0/lib/msal-browser.min.js"></script>
 </head>
 <body>
-  <header>
-    <h1>Q&A Viewer</h1>
-    <button id="loginBtn">Microsoftでログイン</button>
-    <button id="logoutBtn" style="display:none;">ログアウト</button>
-  </header>
+  <div class="app">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-left">
+        <button class="btn pill" id="btnBack" style="display:none;">← 前のページに戻る</button>
+        <div class="viewerbox">
+          <div class="viewer-pill" id="viewerPill">ゲスト</div>
+          <div class="viewer-sub">として閲覧中</div>
+        </div>
+        <button class="bell" id="btnBell" title="通知（ダミー）">
+          🔔 <span id="notifDot" class="notif-dot" style="display:none;"></span>
+        </button>
+      </div>
 
-  <main>
-    <aside id="list"></aside>
-    <section id="detail">
-      <p class="hint">左から質問を選択してください</p>
-    </section>
-  </main>
+      <div class="header-title" id="headerTitle">ホーム</div>
 
-  <script src="app.js"></script>
+      <div class="header-right">
+        <button class="btn pill accent" id="btnLogin">Microsoftでログイン</button>
+        <button class="btn pill" id="btnLogout" style="display:none;">ログアウト</button>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content" id="appRoot"></div>
+  </div>
+
+  <script src="./app.js"></script>
 </body>
 </html>
