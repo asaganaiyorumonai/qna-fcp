@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="theme-color" content="#07070a" />
+  <meta name="theme-color" content="#111111" />
   <title>フロンティアQ&A</title>
 
-  <!-- MSAL（Microsoft公式CDN → フォールバック） -->
+  <!-- MSAL（まずMicrosoft公式CDN → 失敗したらjsdelivrへフォールバック） -->
   <script>
     (function(){
       function load(src){
@@ -18,6 +18,7 @@
           document.head.appendChild(s);
         });
       }
+      // どちらか成功したらOK
       load("https://alcdn.msauth.net/browser/2.38.2/js/msal-browser.min.js")
         .catch(()=>load("https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.23.0/lib/msal-browser.min.js"))
         .catch((e)=>{ window.__MSAL_LOAD_ERROR__ = String(e); });
@@ -25,263 +26,35 @@
   </script>
 
   <style>
-    :root{
-      color-scheme: dark;
-      --bg0:#05070c;
-      --bg1:#070d16;
-
-      --card:#0b0f18;
-      --stroke:rgba(255,255,255,.10);
-      --stroke2:rgba(255,255,255,.14);
-
-      --text:rgba(255,255,255,.92);
-      --muted:rgba(255,255,255,.55);
-
-      --btn:#121a28;
-      --btn2:#0d1522;
-
-      --accent:#4aa3ff;
-      --accent2:#00bcd4;
-
-      --radius:18px;
-      --topH:56px;
-      --pad:14px;
-
-      --maxW:1200px;
-    }
-
-    *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-    html,body{ margin:0; height:100%; background:linear-gradient(180deg,var(--bg0),var(--bg1)); color:var(--text);
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
-      overflow:hidden;
-    }
-
-    /* ===== shell ===== */
-    .app{
-      height:100dvh; width:100%;
-      display:flex; flex-direction:column;
-    }
-    .topbar{
-      height:var(--topH);
-      display:flex; align-items:center; justify-content:center;
-      border-bottom:1px solid var(--stroke);
-      background:rgba(0,0,0,.35);
-      position:relative;
-    }
-    .topbar .title{
-      font-weight:900; letter-spacing:.04em;
-    }
-    .topbar .left{
-      position:absolute; left:12px; top:10px; display:flex; gap:10px; align-items:center;
-    }
-    .topbar .right{
-      position:absolute; right:12px; top:10px; display:flex; gap:10px; align-items:center;
-    }
-
-    .btn{
-      border:1px solid var(--stroke);
-      background:linear-gradient(180deg,var(--btn),var(--btn2));
-      color:var(--text);
-      border-radius:14px;
-      padding:10px 14px;
-      font-weight:900;
-      cursor:pointer;
-      box-shadow:0 8px 22px rgba(0,0,0,.35);
-    }
-    .btn:hover{ border-color:var(--stroke2); }
-    .btn.primary{
-      background:linear-gradient(180deg, rgba(74,163,255,.95), rgba(0,188,212,.55));
-      color:#06101a;
-      border-color:rgba(74,163,255,.55);
-    }
-    .btn.danger{
-      background:linear-gradient(180deg, rgba(255,90,90,.9), rgba(255,90,90,.35));
-      color:#170606;
-      border-color:rgba(255,90,90,.45);
-    }
-
-    .select{
-      height:36px; border-radius:12px;
-      border:1px solid var(--stroke);
-      background:#0b1220; color:var(--text);
-      padding:0 10px; font-weight:900;
-    }
-
-    .wrap{
-      flex:1;
-      display:flex;
-      justify-content:center;
-      overflow:auto;
-    }
-    .container{
-      width:min(var(--maxW), 96vw);
-      padding:18px;
-    }
-
-    /* ===== home ===== */
-    .hero{
-      text-align:center;
-      font-weight:900;
-      font-size:42px;
-      margin:18px 0 14px;
-    }
-    .grid4{
-      display:grid;
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: 1fr 1fr;
-      gap:14px;
-      min-height:520px;
-    }
-    .card{
-      border:1px solid var(--stroke);
-      border-radius:var(--radius);
-      background:rgba(12,16,26,.82);
-      box-shadow:0 18px 36px rgba(0,0,0,.45);
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      position:relative;
-      overflow:hidden;
-      cursor:pointer;
-    }
-    .card:hover{ border-color:var(--stroke2); }
-    .card .cardTitle{
-      color:var(--accent);
-      font-weight:900;
-      font-size:34px;
-      text-shadow:0 6px 18px rgba(0,0,0,.55);
-    }
-    .card .cardSub{
-      position:absolute;
-      left:18px; top:18px;
-      color:var(--muted);
-      font-weight:900;
-    }
-
-    /* ===== pages ===== */
-    .pageTitle{
-      text-align:center;
-      font-weight:900;
-      font-size:28px;
-      margin:10px 0 16px;
-    }
-
-    .panel2{
-      display:grid;
-      grid-template-columns: 1fr 1fr;
-      gap:14px;
-    }
-    .panel{
-      border:1px solid var(--stroke);
-      border-radius:var(--radius);
-      background:rgba(12,16,26,.82);
-      box-shadow:0 18px 36px rgba(0,0,0,.45);
-      padding:14px;
-      min-height:520px;
-      display:flex;
-      flex-direction:column;
-      gap:10px;
-    }
-
-    .imgbox{
-      border:1px solid var(--stroke);
-      border-radius:14px;
-      background:#000;
-      flex:1;
-      min-height:260px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      overflow:hidden;
-    }
-    .imgbox img{ max-width:100%; max-height:100%; object-fit:contain; }
-    .note{ color:var(--muted); font-weight:900; }
-
-    .row{ display:flex; gap:10px; align-items:center; }
-    .grow{ flex:1; }
-
-    .input, .textarea, .file{
-      border:1px solid var(--stroke);
-      background:#0b1220;
-      color:var(--text);
-      border-radius:14px;
-      padding:12px 12px;
-      font-weight:900;
-    }
-    .input, .file{ height:44px; }
-    .textarea{ resize:none; min-height:160px; flex:1; }
-
-    .tabs{ display:flex; gap:10px; }
-    .tab{
-      border:1px solid var(--stroke);
-      border-radius:999px;
-      padding:8px 14px;
-      font-weight:900;
-      cursor:pointer;
-      background:#0b1220;
-      color:var(--text);
-    }
-    .tab.on{
-      background:linear-gradient(180deg, rgba(74,163,255,.95), rgba(0,188,212,.55));
-      color:#06101a;
-      border-color:rgba(74,163,255,.55);
-    }
-
-    .scrollBox{
-      border:1px solid var(--stroke);
-      background:rgba(0,0,0,.25);
-      border-radius:14px;
-      padding:12px;
-      overflow:auto;
-      flex:1;
-      min-height:0;
-    }
-    .pre{ white-space:pre-wrap; user-select:text; font-weight:800; }
-
-    /* ===== modal ===== */
-    .modalBg{
-      position:fixed; inset:0; background:rgba(0,0,0,.55);
-      display:flex; align-items:center; justify-content:center;
-      padding:18px;
-    }
-    .modal{
-      width:min(680px, 94vw);
-      border:1px solid var(--stroke);
-      border-radius:18px;
-      background:rgba(12,16,26,.96);
-      box-shadow:0 28px 60px rgba(0,0,0,.6);
-      padding:14px;
-    }
-    .modalHead{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
-    .modalTitle{ font-weight:900; font-size:18px; }
-    .list{ border-top:1px solid var(--stroke); margin-top:10px; }
-    .item{
-      padding:10px 6px;
-      border-bottom:1px solid rgba(255,255,255,.06);
-      display:flex; gap:10px; align-items:center;
-      cursor:pointer;
-    }
-    .pill{
-      font-weight:900; border:1px solid var(--stroke);
-      border-radius:999px; padding:4px 10px;
-      color:var(--muted); background:rgba(0,0,0,.25);
-    }
-    .pill.warn{ color:#ffd54d; border-color:rgba(255,213,77,.35); }
-    .item .tx{ color:var(--text); font-weight:900; }
-    .item .sub{ color:var(--muted); font-weight:900; }
-
-    @media (max-width: 980px){
-      .grid4{ min-height:460px; }
-      .hero{ font-size:34px; }
-      .card .cardTitle{ font-size:28px; }
-      .panel2{ grid-template-columns: 1fr; }
-      .panel{ min-height:unset; }
-    }
+    :root { --bg:#0b0b0b; --fg:#fafafa; --muted:#b8b8b8; --accent:#3dd2ff; --border:#2a2a2a; }
+    * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui, sans-serif; overflow:hidden; }
+    .page { display:flex; flex-direction:column; width:100%; height:100dvh; }
+    .header { flex:0 0 56px; display:flex; align-items:center; justify-content:center; border-bottom:1px solid var(--border); background:#0e0e0e; font-weight:900; font-size:20px; }
+    .content { flex:1; display:flex; align-items:center; justify-content:center; padding:16px; }
+    .bootbox { width:min(720px, 92vw); border:1px solid var(--border); border-radius:16px; background:#101010; padding:18px; }
+    .bootbox .t { font-weight:900; margin-bottom:8px; }
+    .bootbox .m { color:var(--muted); white-space:pre-wrap; }
+    .btn { margin-top:12px; padding:10px 14px; border-radius:12px; border:1px solid var(--border); background:#1c1c1c; color:#fff; font-weight:800; cursor:pointer; }
   </style>
 </head>
 
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <!-- 何があっても真っ黒にしないための初期表示 -->
+    <div class="page">
+      <div class="header">フロンティアQ&A</div>
+      <div class="content">
+        <div class="bootbox">
+          <div class="t">読み込み中...</div>
+          <div class="m" id="bootMsg">app.js を読み込んでいます</div>
+          <button class="btn" onclick="location.reload()">再読み込み</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- app.js は defer 推奨（DOM構築後に実行） -->
   <script defer src="./app.js"></script>
 </body>
 </html>
