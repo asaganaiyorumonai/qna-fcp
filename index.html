@@ -5,23 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#07070a" />
   <title>フロンティアQ&A</title>
-  <!-- MSAL（Microsoft公式CDN → フォールバック） -->
-  <script>
-    (function(){
-      function load(src){
-        return new Promise((resolve,reject)=>{
-          const s=document.createElement("script");
-          s.src=src; s.async=true;
-          s.onload=()=>resolve();
-          s.onerror=()=>reject(new Error("load failed: "+src));
-          document.head.appendChild(s);
-        });
-      }
-      load("https://alcdn.msauth.net/browser/2.38.2/js/msal-browser.min.js")
-        .catch(()=>load("https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.23.0/lib/msal-browser.min.js"))
-        .catch((e)=>{ window.__MSAL_LOAD_ERROR__ = String(e); });
-    })();
-  </script>
+  <!-- MSAL（先にdeferで読み込む：順序保証される） -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.23.0/lib/msal-browser.min.js"></script>
+
+  <!-- あなたのアプリ（MSALの後に読む） -->
+  <script defer src="./app.js"></script>
   
   <style>
     :root{
@@ -281,9 +269,9 @@
 
 <body>
   <div id="app"></div>
-  <script defer src="./app.js"></script>
 </body>
 </html>
+
 
 
 
