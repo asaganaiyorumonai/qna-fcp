@@ -1,0 +1,44 @@
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+}
+
+header {
+  padding: 10px;
+  background: #222;
+  color: white;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+main {
+  display: flex;
+  height: calc(100vh - 50px);
+}
+
+aside {
+  width: 35%;
+  border-right: 1px solid #ccc;
+  overflow-y: auto;
+}
+
+.list-item {
+  padding: 10px;
+  border-bottom: 1px solid #eee;
+}
+
+.list-item:hover {
+  background: #f0f0f0;
+}
+
+section {
+  flex: 1;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+img {
+  max-width: 100%;
+  margin: 6px 0;
+}
