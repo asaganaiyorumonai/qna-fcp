@@ -17,6 +17,8 @@ const ASKER_OPTS = ["平野さん　FCP","重川さん　宇井建設","山下�
 const SECTION_OPTS = ["二重床施工前","二重床","LGS","鉄板下地","木下地","石膏ボード","長尺シート","クロス","Pタイル","玄関タイル","フローリング","墨チェック（下地）","墨チェック（点検口）"];
 const RESPONDER_OPTS = ["高橋さん　SC","中村さん　SC","平野さん　FCP","重川さん　宇井建設","山下さん　宇井建設","傳田さん　エンジン","佐藤さん　エンジン","小関さん　エンジン","川名さん　エンジン","白根さん　エンジン"];
 
+const NEED_REBUILD_KEY = "qa_need_rebuild";
+
 const state = {
   viewer: localStorage.getItem("qa_viewer") || "ゲスト",
   route: "home",
@@ -97,6 +99,9 @@ function getAccount() {
 }
 
 async function loginRedirect() {
+  // ログイン後に戻ってきたら index を作り直す目印
+  localStorage.setItem(NEED_REBUILD_KEY, "1");
+
   await msalApp.loginRedirect({ scopes: SCOPES, prompt: "select_account" });
   throw new Error("redirecting");
 }
@@ -757,12 +762,15 @@ function render(){
     // ログイン済みなら初回に一覧を作る
     if (acc){
       await getAccessToken();
-      // await rebuildIndex();
-    }
 
+      // 「接続ボタンを押した直後のログイン復帰」のときだけ index を作る
+      if (localStorage.getItem(NEED_REBUILD_KEY) === "1") {
+        localStorage.removeItem(NEED_REBUILD_KEY);
+        await rebuildIndex();
+      }
+    }
     render();
   } catch(e){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
-
