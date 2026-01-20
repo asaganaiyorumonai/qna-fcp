@@ -1,7 +1,7 @@
 /* =========================
-   フロンティアQ&A - GitHub Pages版
-   - MSAL SPA + Microsoft Graph + SharePoint(Files)
-   - 画像ウィンドウの -/等倍/+ は廃止（仕様どおり）
+   フロンティアQ&A - GitHub Pages版（堅牢版）
+   - 黒画面防止（例外を画面に表示）
+   - 出力選択は仕様未実装でOK（プレースホルダー）
 ========================= */
 
 /* ====== Entra / SharePoint 設定 ====== */
@@ -9,22 +9,15 @@ const TENANT_ID = "8fba5de9-6507-44de-b9b2-35abc69bb880";
 const CLIENT_ID = "329441a8-3466-4f0f-b3e1-dca0e3a0c277";
 const REDIRECT_URI = "https://asaganaiyorumonai.github.io/qna-fcp/";
 const SHAREPOINT_SITE_PATH = "shigecreator.sharepoint.com:/sites/allcompany";
-const DOC_ROOT_PATH = "Q&A_Picture_and_text"; // ドキュメント直下のフォルダ名
+const DOC_ROOT_PATH = "Q&A_Picture_and_text";
 
 /* 必要スコープ（Admin consent 推奨） */
 const SCOPES = ["User.Read", "Sites.ReadWrite.All"];
 
-/* ====== 選択肢（Python版の定義を踏襲） ====== */
+/* ====== 選択肢 ====== */
 const ASKER_OPTS = ["平野さん　FCP","重川さん　宇井建設","山下さん　宇井建設","傳田さん　宇井建設","佐藤さん　エンジン","小関さん　エンジン","川名さん　エンジン","白根さん　エンジン"];
 const SECTION_OPTS = ["二重床施工前","二重床","LGS","鉄板下地","木下地","石膏ボード","長尺シート","クロス","Pタイル","玄関タイル","フローリング","墨チェック（下地）","墨チェック（点検口）"];
 const RESPONDER_OPTS = ["高橋さん　SC","中村さん　SC","平野さん　FCP","重川さん　宇井建設","山下さん　宇井建設","傳田さん　エンジン","佐藤さん　エンジン","小関さん　エンジン","川名さん　エンジン","白根さん　エンジン"];
-
-/* ====== DOM ====== */
-const $app = document.getElementById("app");
-const $mask = document.getElementById("sendingMask");
-const $bar = document.getElementById("sendingBar");
-const $title = document.getElementById("sendingTitle");
-const $msg = document.getElementById("sendingMsg");
 
 /* ====== UI State ====== */
 const state = {
@@ -32,16 +25,58 @@ const state = {
   route: "home",
   siteId: null,
   driveId: null,
-  qIndex: [],     // [{q, qDate, asker, section, aDate, excerpt}]
+  qIndex: [],
   unansweredCount: 0,
-  notifItems: [], // [{q, status, title, excerpt}]
-  currentQ: null, // q番号
-  currentQData: null, // {question:{...}, answer:{...}}
-  modeAnswer: "new", // new/edit
-  modeAsk: "new",    // new/edit
+  notifItems: [],
+  currentQ: null,
+  currentQData: null,
+  modeAnswer: "new",
+  modeAsk: "new",
 };
 
+const $app = document.getElementById("app");
+
+/* ====== 黒画面防止：エラーを画面に出す ====== */
+function fatal(title, detail) {
+  $app.innerHTML = `
+    <div style="height:100dvh;display:flex;align-items:center;justify-content:center;padding:16px;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;">
+      <div style="width:min(880px,92vw);border:1px solid #2a2a2a;border-radius:16px;background:#101010;padding:18px;">
+        <div style="font-weight:900;font-size:18px;margin-bottom:10px;">${escapeHtml(title)}</div>
+        <pre style="white-space:pre-wrap;color:#b8b8b8;margin:0;user-select:text;">${escapeHtml(detail || "")}</pre>
+        <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
+          <button style="padding:10px 14px;border-radius:12px;border:1px solid #2a2a2a;background:#1c1c1c;color:#fff;font-weight:800;cursor:pointer;" onclick="location.reload()">再読み込み</button>
+          <button style="padding:10px 14px;border-radius:12px;border:1px solid #2a2a2a;background:#1c1c1c;color:#fff;font-weight:800;cursor:pointer;" onclick="navigator.clipboard.writeText(document.querySelector('pre').innerText)">エラーをコピー</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function escapeHtml(s){ return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+window.addEventListener("error", (e)=>{
+  // 拡張機能のエラーは無視（bybit/evm系がうるさい）
+  const msg = String(e.message || "");
+  if (/evm|bybit|ethereum/i.test(msg)) return;
+  fatal("実行エラーが発生しました", `${msg}\n${e.filename||""}:${e.lineno||""}:${e.colno||""}`);
+});
+
+window.addEventListener("unhandledrejection", (e)=>{
+  const msg = String(e.reason || "");
+  if (/evm|bybit|ethereum/i.test(msg)) return;
+  fatal("Promiseエラーが発生しました", msg);
+});
+
 /* ====== MSAL ====== */
+function ensureMsalLoaded() {
+  if (window.__MSAL_LOAD_ERROR__) {
+    throw new Error("MSALの読み込みに失敗しました（CDNブロックの可能性）\n" + window.__MSAL_LOAD_ERROR__);
+  }
+  if (!window.msal || !window.msal.PublicClientApplication) {
+    throw new Error("MSALが読み込めていません（広告ブロッカー/Shield等でCDNが止まっている可能性）");
+  }
+}
+
 const msalConfig = {
   auth: {
     clientId: CLIENT_ID,
@@ -49,60 +84,36 @@ const msalConfig = {
     redirectUri: REDIRECT_URI,
     navigateToLoginRequestUrl: false,
   },
-  cache: {
-    cacheLocation: "localStorage",
-    storeAuthStateInCookie: false,
-  }
+  cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
 };
-const msalApp = new msal.PublicClientApplication(msalConfig);
+
+let msalApp = null;
 
 async function ensureMsalReady() {
+  ensureMsalLoaded();
+  msalApp = new msal.PublicClientApplication(msalConfig);
   await msalApp.initialize();
-  try {
-    await msalApp.handleRedirectPromise();
-  } catch (e) {
-    console.warn("handleRedirectPromise error:", e);
-  }
+  try { await msalApp.handleRedirectPromise(); } catch {}
 }
 
-/* ====== Auth helpers ====== */
 function getAccount() {
   const accounts = msalApp.getAllAccounts();
   return accounts && accounts.length ? accounts[0] : null;
 }
 
-async function acquireTokenInteractive() {
-  return await msalApp.loginRedirect({
-    scopes: SCOPES,
-    prompt: "select_account",
-  });
-}
-
-async function acquireTokenSilentOrRedirect() {
-  const acc = getAccount();
-  if (!acc) return acquireTokenInteractive();
-
-  try {
-    const res = await msalApp.acquireTokenSilent({ account: acc, scopes: SCOPES });
-    return res.accessToken;
-  } catch (e) {
-    console.warn("acquireTokenSilent failed -> redirect", e);
-    return acquireTokenInteractive();
-  }
+async function loginRedirect() {
+  await msalApp.loginRedirect({ scopes: SCOPES, prompt: "select_account" });
+  throw new Error("redirecting");
 }
 
 async function getAccessToken() {
   const acc = getAccount();
-  if (!acc) {
-    await acquireTokenInteractive();
-    throw new Error("redirecting");
-  }
+  if (!acc) return loginRedirect();
   try {
     const res = await msalApp.acquireTokenSilent({ account: acc, scopes: SCOPES });
     return res.accessToken;
-  } catch (e) {
-    await acquireTokenInteractive();
-    throw new Error("redirecting");
+  } catch {
+    return loginRedirect();
   }
 }
 
@@ -111,45 +122,33 @@ async function graphFetch(url, { method="GET", headers={}, body=null } = {}) {
   const token = await getAccessToken();
   const res = await fetch(url, {
     method,
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      ...headers,
-    },
+    headers: { "Authorization": `Bearer ${token}`, ...headers },
     body,
   });
   if (!res.ok) {
-    const t = await res.text().catch(() => "");
+    const t = await res.text().catch(()=>"");
     throw new Error(`Graph ${res.status}: ${t}`);
   }
   return res;
 }
 
 function encPath(p) {
-  // Graphの :/path:/ 形式で使うため、スラッシュ保持で各セグメントをencode
   return p.split("/").map(encodeURIComponent).join("/");
 }
 
-/* ====== SharePoint 解決 ====== */
 async function ensureSiteAndDrive() {
   if (state.siteId && state.driveId) return;
 
-  // site id
   const siteRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${SHAREPOINT_SITE_PATH}`);
   const site = await siteRes.json();
   state.siteId = site.id;
 
-  // default drive (ドキュメント)
   const driveRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${state.siteId}/drive`);
   const drive = await driveRes.json();
   state.driveId = drive.id;
 }
 
-/* ====== FS model on SharePoint ======
-   root: /ドキュメント/Q&A_Picture_and_text/
-     Q/Qn/Qn.json, Qn.txt, Qn-1.png...
-     A/An/An.json, An.txt, An-1.png...
-==================================== */
-
+/* ====== SharePoint file helpers ====== */
 function qFolder(q) { return `${DOC_ROOT_PATH}/Q/Q${q}`; }
 function aFolder(q) { return `${DOC_ROOT_PATH}/A/A${q}`; }
 function qJsonPath(q){ return `${qFolder(q)}/Q${q}.json`; }
@@ -208,7 +207,6 @@ async function uploadBinary(path, blob, contentType) {
 }
 
 async function getDownloadUrl(path) {
-  // 画像を<img>で表示するため、@microsoft.graph.downloadUrl を取りに行く
   await ensureSiteAndDrive();
   const p = encPath(path);
   const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}`);
@@ -243,33 +241,19 @@ function splitNameCompany(s) {
   if (i>=0) return [s.slice(0,i), s.slice(i+1)];
   return [s||"", ""];
 }
-
-function showSending(title, msg) {
-  $title.textContent = title || "送信中...";
-  $msg.textContent = msg || "";
-  $bar.style.width = "0%";
-  $mask.style.display = "flex";
+function normName(s) {
+  return (s||"").replace(/　/g,"").replace(/ /g,"").replace(/さん/g,"");
 }
-function setSendingProgress(p, msg) {
-  $bar.style.width = `${Math.max(0, Math.min(100, p|0))}%`;
-  if (msg != null) $msg.textContent = msg;
-}
-function hideSending() {
-  $mask.style.display = "none";
+function askerMatchesViewer(asker, viewer) {
+  if (!viewer || viewer==="ゲスト") return false;
+  return normName(asker).includes(normName(viewer));
 }
 
 /* ====== Index build ====== */
 async function rebuildIndex() {
-  showSending("読込中...", "SharePoint から一覧を構築しています");
-  setSendingProgress(10);
-
   await ensureSiteAndDrive();
-  setSendingProgress(20);
 
-  // Q フォルダ一覧 => Q1, Q2...
   const qDirs = await listChildren(`${DOC_ROOT_PATH}/Q`);
-  setSendingProgress(40);
-
   const qNums = qDirs
     .filter(x => x.folder && /^Q\d+$/.test(x.name))
     .map(x => Number(x.name.slice(1)))
@@ -279,17 +263,11 @@ async function rebuildIndex() {
   const idx = [];
   let unanswered = 0;
 
-  for (let i=0;i<qNums.length;i++) {
-    const q = qNums[i];
-    setSendingProgress(40 + Math.floor(50*(i/Math.max(1,qNums.length))), `Q${q} を読込中...`);
-
-    // Q meta/text
-    let qj = {};
-    let qt = "";
+  for (const q of qNums) {
+    let qj = {}, qt = "";
     try { qj = await downloadJson(qJsonPath(q)); } catch {}
     try { qt = await downloadText(qTxtPath(q)); } catch {}
 
-    // A meta 有無
     let aj = null;
     try { aj = await downloadJson(aJsonPath(q)); } catch { aj = null; }
 
@@ -300,54 +278,26 @@ async function rebuildIndex() {
 
     if (!aDate) unanswered++;
 
-    idx.push({
-      q,
-      qDate,
-      asker,
-      section,
-      aDate,
-      text: qt || ""
-    });
+    idx.push({ q, qDate, asker, section, aDate, text: qt || "" });
   }
 
   state.qIndex = idx;
   state.unansweredCount = unanswered;
-
-  // 通知（viewer一致: “名前ゆらぎ”簡易）
   state.notifItems = buildNotificationsForViewer(state.viewer);
-
-  setSendingProgress(100, "完了");
-  setTimeout(hideSending, 250);
-}
-
-/* viewer の「名前ゆらぎ」：スペース/さんを消して部分一致 */
-function normName(s) {
-  return (s||"").replace(/　/g,"").replace(/ /g,"").replace(/さん/g,"");
-}
-function askerMatchesViewer(asker, viewer) {
-  if (!viewer || viewer==="ゲスト") return false;
-  return normName(asker).includes(normName(viewer));
 }
 
 function buildNotificationsForViewer(viewer) {
   const items = [];
   for (const r of state.qIndex) {
     if (!askerMatchesViewer(r.asker, viewer)) continue;
-    const status = r.aDate ? "seen" : "unanswered";
     items.push({
       q: r.q,
-      title: `${r.section || "質問"}について`,
+      status: r.aDate ? "seen" : "unanswered",
       excerpt: excerpt(r.text, 22),
-      status,
-      date: r.aDate || r.qDate || ""
     });
   }
-  // 未回答優先 + 新しい番号優先
-  const order = { "unanswered": 0, "seen": 2, "new": 1 };
   items.sort((a,b)=>{
-    const oa = order[a.status] ?? 9;
-    const ob = order[b.status] ?? 9;
-    if (oa!==ob) return oa-ob;
+    if (a.status!==b.status) return (a.status==="unanswered"?-1:1);
     return b.q-a.q;
   });
   return items;
@@ -355,17 +305,10 @@ function buildNotificationsForViewer(viewer) {
 
 /* ====== Q details ====== */
 async function loadQFull(q) {
-  showSending("読込中...", `Q${q} を開いています`);
-  setSendingProgress(10);
-
-  // Q
   let qj = {}, qt = "";
   try { qj = await downloadJson(qJsonPath(q)); } catch {}
   try { qt = await downloadText(qTxtPath(q)); } catch {}
 
-  setSendingProgress(40);
-
-  // Q photos list
   let qFiles = [];
   try { qFiles = await listChildren(qFolder(q)); } catch {}
   const qPhotos = qFiles
@@ -377,12 +320,9 @@ async function loadQFull(q) {
       return na-nb;
     });
 
-  // A
   let aj = null, at = "";
   try { aj = await downloadJson(aJsonPath(q)); } catch { aj = null; }
   try { at = await downloadText(aTxtPath(q)); } catch { at = ""; }
-
-  setSendingProgress(70);
 
   let aFiles = [];
   try { aFiles = await listChildren(aFolder(q)); } catch {}
@@ -395,97 +335,41 @@ async function loadQFull(q) {
       return na-nb;
     });
 
-  setSendingProgress(95);
-
   state.currentQData = {
-    question: {
-      date: qj.last_updated || "",
-      asker: qj.author || "",
-      section: qj.location || "",
-      text: qt || "",
-      photos: qPhotos
-    },
-    answer: {
-      date: (aj && aj.last_updated) ? aj.last_updated : "",
-      responder: (aj && aj.author) ? aj.author : "",
-      text: at || "",
-      photos: aPhotos
-    }
+    question: { date: qj.last_updated||"", asker: qj.author||"", section: qj.location||"", text: qt||"", photos: qPhotos },
+    answer:   { date: aj?.last_updated||"", responder: aj?.author||"", text: at||"", photos: aPhotos }
   };
-
-  setSendingProgress(100, "完了");
-  setTimeout(hideSending, 200);
 }
 
-/* ====== Create / Update Q ====== */
+/* ====== Create/Update ====== */
 async function createQuestion({ asker, section, text, files }) {
-  showSending("投稿中...", "質問を登録しています");
-  setSendingProgress(10);
-
-  // next Q number: 既存最大+1
   const maxQ = state.qIndex.reduce((m,r)=>Math.max(m, r.q), 0);
   const q = maxQ + 1;
 
-  // meta
   const qMeta = {
     question_no: `Q${q}`,
-    range: { start_row: 0, end_row: 0 }, // 無視OK
+    range: { start_row: 0, end_row: 0 },
     last_updated: nowJstString(),
     author: asker || "",
     location: section || ""
   };
 
-  setSendingProgress(25);
-
-  // json/txt
   await uploadJson(qJsonPath(q), qMeta);
   await uploadText(qTxtPath(q), text || "");
 
-  setSendingProgress(45);
-
-  // photos
   const upFiles = Array.from(files || []);
   for (let i=0; i<upFiles.length; i++) {
     const f = upFiles[i];
     const ext = (f.name.split(".").pop() || "png").toLowerCase();
     const path = `${qFolder(q)}/Q${q}-${i+1}.${ext}`;
     await uploadBinary(path, f, f.type || "application/octet-stream");
-    setSendingProgress(45 + Math.floor(40*((i+1)/Math.max(1,upFiles.length))), `写真 ${i+1}/${upFiles.length} アップロード中...`);
   }
 
-  setSendingProgress(95, "一覧を更新中...");
   await rebuildIndex();
-
-  hideSending();
   return q;
 }
 
-async function updateQuestion(q, { asker, section, text }) {
-  showSending("更新中...", `Q${q} を更新しています`);
-  setSendingProgress(10);
-
-  let qj = {};
-  try { qj = await downloadJson(qJsonPath(q)); } catch { qj = {}; }
-
-  qj.question_no = `Q${q}`;
-  qj.last_updated = nowJstString();
-  qj.author = asker || qj.author || "";
-  qj.location = section || qj.location || "";
-
-  await uploadJson(qJsonPath(q), qj);
-  await uploadText(qTxtPath(q), text || "");
-
-  setSendingProgress(80, "一覧を更新中...");
-  await rebuildIndex();
-  setSendingProgress(100, "完了");
-  setTimeout(hideSending, 200);
-}
-
-/* ====== Create / Update A ====== */
-async function upsertAnswer(q, { responder, text, files, mode /* "new"|"edit" */ }) {
-  showSending("送信中...", `A${q} を${mode==="edit" ? "更新" : "登録"}しています`);
-  setSendingProgress(10);
-
+async function upsertAnswer(q, { responder, text, files, mode }) {
   const aMeta = {
     answer_no: `A${q}`,
     range: { start_row: 0, end_row: 0 },
@@ -496,9 +380,6 @@ async function upsertAnswer(q, { responder, text, files, mode /* "new"|"edit" */
   await uploadJson(aJsonPath(q), aMeta);
   await uploadText(aTxtPath(q), text || "");
 
-  setSendingProgress(35);
-
-  // 既存写真数を数える（editは追記）
   let startIdx = 0;
   if (mode === "edit") {
     let aFiles = [];
@@ -506,9 +387,7 @@ async function upsertAnswer(q, { responder, text, files, mode /* "new"|"edit" */
     const nums = aFiles
       .map(x => x.name || "")
       .map(n => (n.match(new RegExp(`^A${q}-(\\d+)\\.`,"i"))||[])[1])
-      .filter(Boolean)
-      .map(Number)
-      .filter(n => Number.isFinite(n));
+      .filter(Boolean).map(Number).filter(Number.isFinite);
     startIdx = nums.length ? Math.max(...nums) : 0;
   }
 
@@ -519,88 +398,12 @@ async function upsertAnswer(q, { responder, text, files, mode /* "new"|"edit" */
     const n = startIdx + i + 1;
     const path = `${aFolder(q)}/A${q}-${n}.${ext}`;
     await uploadBinary(path, f, f.type || "application/octet-stream");
-    setSendingProgress(35 + Math.floor(50*((i+1)/Math.max(1,upFiles.length))), `写真 ${i+1}/${upFiles.length} アップロード中...`);
   }
 
-  setSendingProgress(90, "一覧を更新中...");
   await rebuildIndex();
-  setSendingProgress(100, "完了");
-  setTimeout(hideSending, 200);
 }
 
-/* ====== Export (light) ======
-   - 選択したQの Q/A txt/json と画像を ZIP にしてDL
-   - GitHub Pagesのみで完結（サーバ不要）
-================================ */
-async function exportSelectedAsZip(qNums) {
-  if (!qNums.length) return;
-
-  showSending("出力中...", "ZIPを作成しています");
-  setSendingProgress(5);
-
-  const zip = new JSZip();
-
-  for (let i=0;i<qNums.length;i++) {
-    const q = qNums[i];
-    setSendingProgress(5 + Math.floor(85*(i/Math.max(1,qNums.length))), `Q${q} を収集中...`);
-
-    // Q json/txt
-    try { zip.file(`Q/Q${q}/Q${q}.json`, await downloadText(qJsonPath(q))); } catch {}
-    try { zip.file(`Q/Q${q}/Q${q}.txt`, await downloadText(qTxtPath(q))); } catch {}
-
-    // Q photos
-    try {
-      const qFiles = await listChildren(qFolder(q));
-      const photos = qFiles.filter(x => x.file && new RegExp(`^Q${q}-\\d+\\.`,"i").test(x.name));
-      for (const pf of photos) {
-        const pth = `${qFolder(q)}/${pf.name}`;
-        const dl = await getDownloadUrl(pth);
-        if (dl) {
-          const bin = await fetch(dl).then(r=>r.arrayBuffer());
-          zip.file(`Q/Q${q}/${pf.name}`, bin);
-        }
-      }
-    } catch {}
-
-    // A side if exists
-    try { zip.file(`A/A${q}/A${q}.json`, await downloadText(aJsonPath(q))); } catch {}
-    try { zip.file(`A/A${q}/A${q}.txt`, await downloadText(aTxtPath(q))); } catch {}
-
-    try {
-      const aFiles = await listChildren(aFolder(q));
-      const photos = aFiles.filter(x => x.file && new RegExp(`^A${q}-\\d+\\.`,"i").test(x.name));
-      for (const pf of photos) {
-        const pth = `${aFolder(q)}/${pf.name}`;
-        const dl = await getDownloadUrl(pth);
-        if (dl) {
-          const bin = await fetch(dl).then(r=>r.arrayBuffer());
-          zip.file(`A/A${q}/${pf.name}`, bin);
-        }
-      }
-    } catch {}
-  }
-
-  setSendingProgress(95, "ZIP生成中...");
-  const blob = await zip.generateAsync({ type:"blob" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `QnA_export_${Date.now()}.zip`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-
-  setSendingProgress(100, "完了");
-  setTimeout(hideSending, 250);
-}
-
-/* ====== Rendering ====== */
-function render() {
-  $app.innerHTML = "";
-  $app.appendChild(renderPage());
-}
-
+/* ====== Small UI helpers ====== */
 function el(tag, attrs={}, children=[]) {
   const e = document.createElement(tag);
   for (const [k,v] of Object.entries(attrs||{})) {
@@ -616,410 +419,94 @@ function el(tag, attrs={}, children=[]) {
   return e;
 }
 
-function renderHeader(title, { back=null } = {}) {
-  const viewerSelect = el("select", { class:"hselect", id:"viewerSel" },
-    ["ゲスト", ...ASKER_OPTS].map(v => el("option", { value:v, text:v, ...(v===state.viewer?{selected:"selected"}:{}) }))
-  );
-  viewerSelect.addEventListener("change", async () => {
-    state.viewer = viewerSelect.value;
-    localStorage.setItem("qa_viewer", state.viewer);
-    state.notifItems = buildNotificationsForViewer(state.viewer);
-    render();
-  });
-
-  const notifDot = el("div", { class:"notif-dot", id:"notifDot" });
-  const notifBtn = el("button", { class:"notifbtn", id:"notifBtn" }, [
-    el("span",{class:"bell", text:"🔔"}),
-    notifDot
-  ]);
-
-  const hasUnanswered = state.notifItems.some(x => x.status==="unanswered");
-  notifDot.style.display = hasUnanswered ? "block" : "none";
-
-  const panel = el("div", { class:"notifpanel", id:"notifPanel" }, []);
-  panel.appendChild(el("div", { class:"notif-title", text:"通知" }));
-  if (!state.notifItems.length) {
-    panel.appendChild(el("div", { class:"notif-empty", text:"通知はありません" }));
-  } else {
-    for (const it of state.notifItems.slice(0, 30)) {
-      const row = el("div", { class:`notif-row st-${it.status}` }, [
-        el("div", { class:"num", text:`Q${it.q}` }),
-        el("div", { class:"txt" }, [
-          el("span", { class:"tag", text: it.status==="unanswered" ? "未回答" : "" }),
-          el("span", { text: it.excerpt })
-        ])
-      ]);
-      row.addEventListener("click", async () => {
-        panel.style.display = "none";
-        state.route = "answer";
-        state.currentQ = it.q;
-        await loadQFull(it.q);
-        render();
-      });
-      panel.appendChild(row);
-    }
+function renderHeader(title, backFn=null) {
+  const hdr = el("div",{style:"height:56px;display:flex;align-items:center;justify-content:center;position:relative;border-bottom:1px solid #2a2a2a;background:#0e0e0e;font-weight:900;font-size:20px;"});
+  hdr.appendChild(el("div",{text:title}));
+  if (backFn) {
+    const b = el("button",{text:"← 前のページに戻る", style:"position:absolute;left:12px;top:10px;padding:10px 14px;border-radius:12px;border:1px solid #2a2a2a;background:#151515;color:#fff;font-weight:800;cursor:pointer;", onclick:backFn});
+    hdr.appendChild(b);
   }
-
-  notifBtn.addEventListener("click", () => {
-    panel.style.display = (panel.style.display==="none" || !panel.style.display) ? "block" : "none";
-  });
-
-  const left = el("div", { class:"header-left" }, [
-    back ? el("button",{class:"backbtn", text:"← 前のページに戻る", onclick: back}) : el("div",{style:"width:1px;"}),
-  ]);
-
-  const hdr = el("div", { class:"header" }, [
-    left,
-    el("div",{class:"header-title", text:title}),
-    el("div", { class:"header-right" }, [
-      el("div",{class:"viewing-as", text:`${splitNameCompany(state.viewer)[0]} として閲覧中`}),
-      viewerSelect,
-      notifBtn,
-      panel
-    ])
-  ]);
   return hdr;
 }
 
 /* ====== Pages ====== */
 function renderHome() {
-  const page = el("div", { class:"page" }, [
+  const page = el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
     renderHeader("ホーム"),
-    el("div", { class:"content" }, [
-      el("div", { class:"title", text:"٩('ω')9フロンティアQ&A アプリ版！！" }),
-      el("div", { class:"chips" }, [
-        el("div", { class:"chip", onclick: async ()=>{
-          state.route="answer";
-          render();
-        }}, [
-          el("div",{text:"回答する", style:"color:var(--accent);"}),
-          el("div",{class:"subtxt", text:`回答待ち：${state.unansweredCount}件`})
-        ]),
-        el("div", { class:"chip", onclick: ()=>{
-          state.route="ask";
-          render();
-        }}, [ el("div",{text:"質問する", style:"color:var(--accent);"}) ]),
-        el("div", { class:"chip", onclick: ()=>{
-          state.route="export";
-          render();
-        }}, [ el("div",{text:"出力選択", style:"color:var(--accent);"}) ]),
-        el("div", { class:"chip", onclick: ()=>{
-          state.route="history";
-          render();
-        }}, [ el("div",{text:"過去の質問を見る", style:"color:var(--accent);"}) ]),
-      ]),
+    el("div",{style:"flex:1;display:flex;flex-direction:column;gap:12px;padding:12px;"},[
+      el("div",{text:"٩('ω')9フロンティアQ&A アプリ版！！", style:"text-align:center;font-weight:900;font-size:34px;"}),
+      el("div",{style:"flex:1;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:12px;min-height:0;"},[
+        cardBtn("回答する", `回答待ち：${state.unansweredCount}件`, async ()=>{ state.route="answer"; render(); }),
+        cardBtn("質問する","", ()=>{ state.route="ask"; render(); }),
+        cardBtn("出力選択","（中身は未実装でOK）", ()=>{ state.route="export"; render(); }),
+        cardBtn("過去の質問を見る","", ()=>{ state.route="history"; render(); }),
+      ])
     ])
   ]);
   return page;
+
+  function cardBtn(t, sub, fn){
+    const c = el("div",{style:"border:2px solid #2a2a2a;border-radius:18px;background:#1c1c1c;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;gap:8px;"});
+    c.appendChild(el("div",{text:t, style:"color:#3dd2ff;font-weight:900;font-size:28px;"}));
+    if (sub) c.appendChild(el("div",{text:sub, style:"color:#b8b8b8;font-weight:700;"}));
+    c.addEventListener("click", fn);
+    return c;
+  }
 }
 
-/* --- Answer page --- */
-function renderAnswer() {
-  const leftPane = el("div",{class:"pane left"},[]);
-  const rightPane = el("div",{class:"pane right"},[]);
-
-  // selector
-  const sel = el("select", { class:"select", id:"qSel" }, [
-    el("option", { value:"", text:"回答待ちの質問を選択" }),
-    ...state.qIndex
-      .filter(r => !r.aDate)
-      .slice().sort((a,b)=>b.q-a.q)
-      .map(r => el("option", { value:String(r.q), text:`Q${r.q}　${fmtDateJP(r.qDate)}　${splitNameCompany(r.asker)[0]}　${r.section}` }))
-  ]);
-  const btnShow = el("button",{class:"btn accent", text:"表示", onclick: async ()=>{
-    const v = Number(sel.value||0);
-    if (!v) return;
-    state.currentQ = v;
-    await loadQFull(v);
-    render();
-  }});
-
-  leftPane.appendChild(el("div",{class:"fields"},[sel, btnShow]));
-
-  // tabs (Q / A)
-  const tabQ = el("div",{class:"tab sel", text:"質問"});
-  const tabA = el("div",{class:"tab", text:"回答"});
-  const tabs = el("div",{class:"tabs"},[tabQ, tabA]);
-
-  const box = el("div",{class:"hscroll", style:"flex:1; min-height:0;"});
-  leftPane.appendChild(tabs);
-  leftPane.appendChild(box);
-
-  function renderQView() {
-    box.innerHTML = "";
-    const d = state.currentQData;
-    if (!d) {
-      box.appendChild(el("div",{class:"note", text:"左上でQを選択して「表示」してください。"}));
-      return;
-    }
-    // image window
-    const imgwin = el("div",{class:"imgwin"},[ el("div",{class:"note", text:"写真が登録されていません"}) ]);
-    const photos = d.question.photos || [];
-    if (photos.length) {
-      imgwin.innerHTML = "";
-      const img = el("img",{});
-      imgwin.appendChild(img);
-      // 最初の写真
-      (async ()=>{
-        const url = await getDownloadUrl(photos[0]);
-        if (url) img.src = url;
-      })();
-    }
-    box.appendChild(imgwin);
-
-    // text
-    const tx = el("div",{class:"textarea", style:"height:220px; white-space:pre-wrap; overflow:auto;"});
-    tx.textContent = d.question.text || "";
-    box.appendChild(el("div",{class:"note", text:"質問内容（ここだけ縦スクロール可）"}));
-    box.appendChild(tx);
-  }
-
-  function renderAView() {
-    box.innerHTML = "";
-    const d = state.currentQData;
-    if (!d) {
-      box.appendChild(el("div",{class:"note", text:"左上でQを選択して「表示」してください。"}));
-      return;
-    }
-
-    const imgwin = el("div",{class:"imgwin"},[ el("div",{class:"note", text:"写真が登録されていません"}) ]);
-    const photos = d.answer.photos || [];
-    if (photos.length) {
-      imgwin.innerHTML = "";
-      const img = el("img",{});
-      imgwin.appendChild(img);
-      (async ()=>{
-        const url = await getDownloadUrl(photos[0]);
-        if (url) img.src = url;
-      })();
-    }
-    box.appendChild(imgwin);
-
-    const tx = el("div",{class:"textarea", style:"height:220px; white-space:pre-wrap; overflow:auto;"});
-    tx.textContent = d.answer.text || "";
-    box.appendChild(el("div",{class:"note", text:"回答内容（ここだけ縦スクロール可）"}));
-    box.appendChild(tx);
-  }
-
-  tabQ.addEventListener("click", ()=>{ tabQ.classList.add("sel"); tabA.classList.remove("sel"); renderQView(); });
-  tabA.addEventListener("click", ()=>{ tabA.classList.add("sel"); tabQ.classList.remove("sel"); renderAView(); });
-
-  renderQView();
-
-  // right pane = input
-  const responderSel = el("select",{class:"select"},[
-    el("option",{value:"", text:"回答者"}),
-    ...RESPONDER_OPTS.map(v=>el("option",{value:v, text:v}))
-  ]);
-  const ansText = el("textarea",{class:"textarea", placeholder:"回答内容"});
-  const file = el("input",{class:"file", type:"file", multiple:"multiple", accept:"image/*"});
-  const submit = el("button",{class:"btn ok bigbtn", text:"この内容で回答する", onclick: async ()=>{
-    const q = state.currentQ;
-    if (!q) return alert("Qを選択してください");
-    if (!responderSel.value) return alert("回答者を選択してください");
-    await upsertAnswer(q, {
-      responder: responderSel.value,
-      text: ansText.value || "",
-      files: file.files,
-      mode: state.modeAnswer
-    });
-    await loadQFull(q);
-    render();
-  }});
-
-  // mode buttons (new/edit)
-  const modeNew = el("button",{class:"btn accent", text:"新規", onclick: ()=>{
-    state.modeAnswer="new";
-    modeNew.classList.add("accent");
-    modeEdit.classList.remove("accent");
-  }});
-  const modeEdit = el("button",{class:"btn", text:"編集", onclick: ()=>{
-    state.modeAnswer="edit";
-    modeEdit.classList.add("accent");
-    modeNew.classList.remove("accent");
-  }});
-  modeNew.classList.add("accent");
-
-  rightPane.appendChild(el("div",{class:"fields"},[modeNew, modeEdit]));
-  rightPane.appendChild(responderSel);
-  rightPane.appendChild(ansText);
-  rightPane.appendChild(el("div",{class:"fields"},[file]));
-  rightPane.appendChild(submit);
-
-  // 既に表示済みならフォームに反映（編集支援）
-  if (state.currentQData) {
-    responderSel.value = state.currentQData.answer.responder || "";
-    ansText.value = state.currentQData.answer.text || "";
-  }
-
-  const page = el("div",{class:"page"},[
-    renderHeader("回答する",{back: ()=>{ state.route="home"; state.currentQ=null; state.currentQData=null; render(); }}),
-    el("div",{class:"content"},[
-      el("div",{class:"row"},[leftPane, rightPane])
+function renderExport() {
+  return el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
+    renderHeader("出力選択", ()=>{ state.route="home"; render(); }),
+    el("div",{style:"padding:16px;color:#b8b8b8;font-weight:800;"},[
+      "この画面は仕様どおり中身は未実装でOKです。"
     ])
   ]);
-  return page;
 }
 
-/* --- Ask page --- */
-function renderAsk() {
-  const leftPane = el("div",{class:"pane left"},[]);
-  const rightPane = el("div",{class:"pane right"},[]);
-
-  // left = preview
-  const imgwin = el("div",{class:"imgwin"},[ el("div",{class:"note", text:"写真が登録されていません"}) ]);
-  leftPane.appendChild(imgwin);
-  leftPane.appendChild(el("div",{class:"note", text:"※写真を登録しなくても質問の投稿はできます"}));
-
-  // right = form
-  const askerSel = el("select",{class:"select"},[
-    el("option",{value:"", text:"質問者"}),
-    ...ASKER_OPTS.map(v=>el("option",{value:v, text:v}))
-  ]);
-  const sectionSel = el("select",{class:"select"},[
-    el("option",{value:"", text:"検査箇所"}),
-    ...SECTION_OPTS.map(v=>el("option",{value:v, text:v}))
-  ]);
-  const qText = el("textarea",{class:"textarea", placeholder:"質問内容"});
-  const file = el("input",{class:"file", type:"file", multiple:"multiple", accept:"image/*"});
-
-  file.addEventListener("change", ()=>{
-    const f0 = file.files && file.files[0];
-    if (!f0) return;
-    imgwin.innerHTML = "";
-    const img = el("img",{});
-    imgwin.appendChild(img);
-    img.src = URL.createObjectURL(f0);
-  });
-
-  const submit = el("button",{class:"btn accent bigbtn", text:"投稿する", onclick: async ()=>{
-    if (!askerSel.value) return alert("質問者を選択してください");
-    if (!sectionSel.value) return alert("検査箇所を選択してください");
-
-    const q = await createQuestion({
-      asker: askerSel.value,
-      section: sectionSel.value,
-      text: qText.value || "",
-      files: file.files
-    });
-    state.route="answer";
-    state.currentQ = q;
-    await loadQFull(q);
-    render();
-  }});
-
-  // edit mode（既存Q編集）
-  const modeNew = el("button",{class:"btn accent", text:"新規", onclick: ()=>{
-    state.modeAsk="new";
-    modeNew.classList.add("accent");
-    modeEdit.classList.remove("accent");
-    render();
-  }});
-  const modeEdit = el("button",{class:"btn", text:"編集", onclick: ()=>{
-    state.modeAsk="edit";
-    modeEdit.classList.add("accent");
-    modeNew.classList.remove("accent");
-    render();
-  }});
-
-  const editSel = el("select",{class:"select"},[
-    el("option",{value:"", text:"編集する質問を選択（任意）"}),
-    ...state.qIndex.slice().sort((a,b)=>b.q-a.q).map(r=>el("option",{value:String(r.q), text:`Q${r.q}　${fmtDateJP(r.qDate)}　${splitNameCompany(r.asker)[0]}　${r.section}`}))
-  ]);
-
-  const btnLoad = el("button",{class:"btn", text:"読み込み", onclick: async ()=>{
-    const q = Number(editSel.value||0);
-    if (!q) return;
-    state.currentQ = q;
-    await loadQFull(q);
-
-    const d = state.currentQData;
-    askerSel.value = d.question.asker || "";
-    sectionSel.value = d.question.section || "";
-    qText.value = d.question.text || "";
-
-    // preview first photo (from sharepoint)
-    imgwin.innerHTML = "";
-    if (d.question.photos && d.question.photos.length) {
-      const img = el("img",{});
-      imgwin.appendChild(img);
-      const url = await getDownloadUrl(d.question.photos[0]);
-      if (url) img.src = url;
-    } else {
-      imgwin.appendChild(el("div",{class:"note", text:"写真が登録されていません"}));
-    }
-  }});
-
-  const btnUpdate = el("button",{class:"btn ok bigbtn", text:"この内容で更新する", onclick: async ()=>{
-    if (state.modeAsk!=="edit") return;
-    const q = state.currentQ;
-    if (!q) return alert("編集対象Qを読み込んでください");
-    if (!askerSel.value) return alert("質問者を選択してください");
-    if (!sectionSel.value) return alert("検査箇所を選択してください");
-
-    await updateQuestion(q, { asker: askerSel.value, section: sectionSel.value, text: qText.value||"" });
-    await loadQFull(q);
-    render();
-  }});
-
-  rightPane.appendChild(el("div",{class:"fields"},[modeNew, modeEdit]));
-
-  if (state.modeAsk==="edit") {
-    modeEdit.classList.add("accent");
-    modeNew.classList.remove("accent");
-    rightPane.appendChild(el("div",{class:"fields"},[editSel, btnLoad]));
-    rightPane.appendChild(btnUpdate);
-    rightPane.appendChild(el("div",{class:"note", text:"※編集は本文とメタのみ。写真の追加は「質問する」で新規投稿として運用推奨（必要なら後で拡張可）"}));
-  } else {
-    modeNew.classList.add("accent");
-    modeEdit.classList.remove("accent");
-  }
-
-  rightPane.appendChild(askerSel);
-  rightPane.appendChild(sectionSel);
-  rightPane.appendChild(qText);
-  rightPane.appendChild(file);
-  if (state.modeAsk==="new") rightPane.appendChild(submit);
-
-  const page = el("div",{class:"page"},[
-    renderHeader("質問する",{back: ()=>{ state.route="home"; render(); }}),
-    el("div",{class:"content"},[
-      el("div",{class:"row"},[leftPane, rightPane])
-    ])
-  ]);
-  return page;
-}
-
-/* --- History page --- */
 function renderHistory() {
-  const askerSel = el("select",{class:"select"},[
+  const page = el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
+    renderHeader("過去の質問を見る", ()=>{ state.route="home"; render(); }),
+  ]);
+
+  const wrap = el("div",{style:"flex:1;display:flex;flex-direction:column;gap:10px;padding:12px;min-height:0;"});
+  const askerSel = el("select",{style:selStyle()},[
     el("option",{value:"", text:"質問者（任意）"}),
     ...ASKER_OPTS.map(v=>el("option",{value:v, text:v}))
   ]);
-  const sectionSel = el("select",{class:"select"},[
+  const sectionSel = el("select",{style:selStyle()},[
     el("option",{value:"", text:"検査箇所（任意）"}),
     ...SECTION_OPTS.map(v=>el("option",{value:v, text:v}))
   ]);
-  const btn = el("button",{class:"btn accent", text:"検索"});
+  const btn = el("button",{text:"検索", style:btnStyle("#0af","#000"), onclick:()=>paint()});
+  const top = el("div",{style:"display:flex;gap:10px;"},[askerSel, sectionSel, btn]);
+  const list = el("div",{style:"flex:1;min-height:0;overflow:auto;border:1px solid #2a2a2a;border-radius:14px;background:#0d0d0d;"});
 
-  const list = el("div",{class:"hscroll", style:"flex:1; min-height:0;"});
+  wrap.appendChild(top);
+  wrap.appendChild(list);
+  page.appendChild(wrap);
 
-  function paint(rows) {
+  paint();
+  return page;
+
+  function paint(){
+    const a = askerSel.value;
+    const s = sectionSel.value;
+    let rows = state.qIndex.slice();
+    if (a) rows = rows.filter(r=>r.asker===a);
+    if (s) rows = rows.filter(r=>r.section===s);
+
     list.innerHTML = "";
-    const head = el("div",{class:"listrow", style:"color:#bbb; font-weight:900; cursor:default;"},[
-      el("div",{text:"Q番号"}),
-      el("div",{text:"日付"}),
-      el("div",{text:"質問者"}),
-      el("div",{text:"質問内容"})
+    const head = el("div",{style:"display:grid;grid-template-columns:90px 170px 160px 1fr;gap:8px;padding:10px;border-bottom:1px solid #222;color:#bbb;font-weight:900;"},[
+      el("div",{text:"Q番号"}), el("div",{text:"日付"}), el("div",{text:"質問者"}), el("div",{text:"質問内容"})
     ]);
     list.appendChild(head);
 
-    for (const r of rows.slice().sort((a,b)=>b.q-a.q).slice(0,200)) {
-      const row = el("div",{class:"listrow"},[
+    for (const r of rows.sort((x,y)=>y.q-x.q).slice(0,250)) {
+      const row = el("div",{style:"display:grid;grid-template-columns:90px 170px 160px 1fr;gap:8px;padding:10px;border-bottom:1px solid #222;cursor:pointer;"},[
         el("div",{text:`Q${r.q}`}),
-        el("div",{text: fmtDateJP(r.qDate)}),
-        el("div",{text: splitNameCompany(r.asker)[0]}),
-        el("div",{text: excerpt(r.text, 60)})
+        el("div",{text:fmtDateJP(r.qDate)}),
+        el("div",{text:splitNameCompany(r.asker)[0]}),
+        el("div",{text:excerpt(r.text, 70)}),
       ]);
       row.addEventListener("click", async ()=>{
         state.route="answer";
@@ -1031,105 +518,223 @@ function renderHistory() {
     }
   }
 
-  btn.addEventListener("click", ()=>{
-    const a = askerSel.value;
-    const s = sectionSel.value;
-    let rows = state.qIndex.slice();
-    if (a) rows = rows.filter(r=>r.asker===a);
-    if (s) rows = rows.filter(r=>r.section===s);
-    paint(rows);
+  function selStyle(){ return "flex:1;height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function btnStyle(bg,fg){ return `height:52px;border-radius:12px;border:2px solid #2a2a2a;background:${bg};color:${fg};padding:0 18px;font-weight:900;cursor:pointer;white-space:nowrap;`; }
+}
+
+function renderAsk() {
+  const page = el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
+    renderHeader("質問する", ()=>{ state.route="home"; render(); }),
+  ]);
+
+  const row = el("div",{style:"flex:1;display:flex;gap:12px;padding:12px;min-height:0;"});
+  const left = el("div",{style:"flex:1;border:2px solid #2a2a2a;border-radius:18px;background:#101010;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0;"});
+  const right= el("div",{style:"flex:1;border:2px solid #2a2a2a;border-radius:18px;background:#101010;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0;"});
+
+  const imgwin = el("div",{style:"flex:1;min-height:240px;border-radius:14px;border:1px solid #333;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;"},[
+    el("div",{text:"写真が登録されていません", style:"color:#888;font-weight:900;"})
+  ]);
+  left.appendChild(imgwin);
+  left.appendChild(el("div",{text:"※写真を登録しなくても質問の投稿はできます", style:"color:#b8b8b8;font-weight:800;"}));
+
+  const askerSel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"質問者"}),
+    ...ASKER_OPTS.map(v=>el("option",{value:v, text:v}))
+  ]);
+  const sectionSel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"検査箇所"}),
+    ...SECTION_OPTS.map(v=>el("option",{value:v, text:v}))
+  ]);
+  const txt = el("textarea",{style:taStyle(), placeholder:"質問内容"});
+  const file = el("input",{type:"file", multiple:"multiple", accept:"image/*", style:fileStyle()});
+  file.addEventListener("change", ()=>{
+    const f0 = file.files && file.files[0];
+    if (!f0) return;
+    imgwin.innerHTML = "";
+    const img = el("img",{style:"max-width:100%;max-height:100%;object-fit:contain;"});
+    imgwin.appendChild(img);
+    img.src = URL.createObjectURL(f0);
   });
 
-  // initial
-  paint(state.qIndex);
-
-  const page = el("div",{class:"page"},[
-    renderHeader("過去の質問を見る",{back: ()=>{ state.route="home"; render(); }}),
-    el("div",{class:"content"},[
-      el("div",{class:"fields"},[askerSel, sectionSel, btn]),
-      list
-    ])
-  ]);
-  return page;
-}
-
-/* --- Export page --- */
-function renderExport() {
-  const list = el("div",{class:"hscroll", style:"flex:1; min-height:0;"});
-  const selected = new Set();
-
-  list.appendChild(el("div",{class:"checklisthead"},[
-    el("div",{text:""}),
-    el("div",{text:"Q番号"}),
-    el("div",{text:"日付"}),
-    el("div",{text:"質問者"}),
-    el("div",{text:"本文"})
-  ]));
-
-  for (const r of state.qIndex.slice().sort((a,b)=>b.q-a.q).slice(0,300)) {
-    const cb = el("input",{type:"checkbox"});
-    cb.addEventListener("change", ()=>{ cb.checked ? selected.add(r.q) : selected.delete(r.q); });
-
-    const row = el("div",{class:"checklistrow"},[
-      el("div",{},[cb]),
-      el("div",{text:`Q${r.q}`}),
-      el("div",{text: fmtDateJP(r.qDate)}),
-      el("div",{text: splitNameCompany(r.asker)[0]}),
-      el("div",{text: excerpt(r.text, 80)})
-    ]);
-    list.appendChild(row);
-  }
-
-  const btnZip = el("button",{class:"btn ok bigbtn", text:"選択したQをZIPでダウンロード", onclick: async ()=>{
-    await exportSelectedAsZip(Array.from(selected).sort((a,b)=>a-b));
+  const submit = el("button",{text:"投稿する", style:btnStyle("#0af","#000"), onclick: async ()=>{
+    if (!askerSel.value) return alert("質問者を選択してください");
+    if (!sectionSel.value) return alert("検査箇所を選択してください");
+    const q = await createQuestion({ asker:askerSel.value, section:sectionSel.value, text:txt.value||"", files:file.files });
+    state.route="answer";
+    state.currentQ = q;
+    await loadQFull(q);
+    render();
   }});
 
-  const page = el("div",{class:"page"},[
-    renderHeader("出力選択",{back: ()=>{ state.route="home"; render(); }}),
-    el("div",{class:"content"},[
-      el("div",{class:"note", text:"※GitHub Pages版はサーバ無しのため、まずは「ZIP出力」を実装しています（PDF/JPEG整形出力は必要なら次で追加できます）。"}),
-      list,
-      el("div",{class:"bottom-actions"},[btnZip])
-    ])
-  ]);
+  right.appendChild(askerSel);
+  right.appendChild(sectionSel);
+  right.appendChild(txt);
+  right.appendChild(file);
+  right.appendChild(submit);
+
+  row.appendChild(left);
+  row.appendChild(right);
+  page.appendChild(row);
   return page;
+
+  function selStyle(){ return "height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function taStyle(){ return "flex:1;min-height:140px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;resize:none;"; }
+  function fileStyle(){ return "height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function btnStyle(bg,fg){ return `height:64px;border-radius:14px;border:2px solid #2a2a2a;background:${bg};color:${fg};font-weight:900;font-size:20px;cursor:pointer;`; }
 }
 
-function renderPage() {
-  if (state.route==="home") return renderHome();
-  if (state.route==="answer") return renderAnswer();
-  if (state.route==="ask") return renderAsk();
-  if (state.route==="history") return renderHistory();
-  if (state.route==="export") return renderExport();
-  state.route="home";
-  return renderHome();
+function renderAnswer() {
+  const page = el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
+    renderHeader("回答する", ()=>{ state.route="home"; state.currentQ=null; state.currentQData=null; render(); }),
+  ]);
+
+  const row = el("div",{style:"flex:1;display:flex;gap:12px;padding:12px;min-height:0;"});
+  const left = el("div",{style:"flex:1;border:2px solid #2a2a2a;border-radius:18px;background:#101010;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0;"});
+  const right= el("div",{style:"flex:1;border:2px solid #2a2a2a;border-radius:18px;background:#101010;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0;"});
+
+  const sel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"回答待ちの質問を選択"}),
+    ...state.qIndex.filter(r=>!r.aDate).sort((a,b)=>b.q-a.q).map(r =>
+      el("option",{value:String(r.q), text:`Q${r.q}　${fmtDateJP(r.qDate)}　${splitNameCompany(r.asker)[0]}　${r.section}`})
+    )
+  ]);
+  const showBtn = el("button",{text:"表示", style:btnStyle("#0af","#000",52), onclick: async ()=>{
+    const q = Number(sel.value||0);
+    if (!q) return;
+    state.currentQ=q;
+    await loadQFull(q);
+    paintLeft();
+    paintRight();
+  }});
+  left.appendChild(el("div",{style:"display:flex;gap:10px;"},[sel, showBtn]));
+
+  const tabs = el("div",{style:"display:flex;gap:10px;"});
+  const tQ = tabBtn("質問", true, ()=>{ active="q"; paintLeft(); });
+  const tA = tabBtn("回答", false, ()=>{ active="a"; paintLeft(); });
+  tabs.appendChild(tQ.btn); tabs.appendChild(tA.btn);
+  left.appendChild(tabs);
+
+  const box = el("div",{style:"flex:1;min-height:0;overflow:auto;border:1px solid #2a2a2a;border-radius:14px;background:#0d0d0d;padding:10px;"});
+  left.appendChild(box);
+
+  let active = "q";
+
+  const responderSel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"回答者"}),
+    ...RESPONDER_OPTS.map(v=>el("option",{value:v, text:v}))
+  ]);
+  const ansText = el("textarea",{style:taStyle(), placeholder:"回答内容"});
+  const file = el("input",{type:"file", multiple:"multiple", accept:"image/*", style:fileStyle()});
+
+  const modeWrap = el("div",{style:"display:flex;gap:10px;"});
+  const btnNew = el("button",{text:"新規", style:btnStyle("#0af","#000",52), onclick:()=>{state.modeAnswer="new"; paintRight();}});
+  const btnEdit= el("button",{text:"編集", style:btnStyle("#1c1c1c","#fff",52), onclick:()=>{state.modeAnswer="edit"; paintRight();}});
+  modeWrap.appendChild(btnNew); modeWrap.appendChild(btnEdit);
+
+  const submit = el("button",{text:"この内容で回答する", style:btnStyle("#00ff66","#000",64), onclick: async ()=>{
+    const q = state.currentQ;
+    if (!q) return alert("Qを選択してください");
+    if (!responderSel.value) return alert("回答者を選択してください");
+    await upsertAnswer(q, { responder:responderSel.value, text:ansText.value||"", files:file.files, mode:state.modeAnswer });
+    await loadQFull(q);
+    paintLeft();
+    paintRight();
+  }});
+
+  right.appendChild(modeWrap);
+  right.appendChild(responderSel);
+  right.appendChild(ansText);
+  right.appendChild(file);
+  right.appendChild(submit);
+
+  row.appendChild(left); row.appendChild(right);
+  page.appendChild(row);
+
+  paintLeft();
+  paintRight();
+  return page;
+
+  function paintLeft(){
+    box.innerHTML = "";
+    if (!state.currentQData){
+      box.appendChild(el("div",{text:"左上でQを選択して「表示」してください。", style:"color:#bbb;font-weight:900;"}));
+      return;
+    }
+    const d = state.currentQData;
+    const side = (active==="q") ? d.question : d.answer;
+    const photos = side.photos || [];
+
+    const imgwin = el("div",{style:"height:260px;border-radius:14px;border:1px solid #333;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;margin-bottom:10px;"},[
+      el("div",{text:"写真が登録されていません", style:"color:#888;font-weight:900;"})
+    ]);
+    if (photos.length) {
+      imgwin.innerHTML = "";
+      const img = el("img",{style:"max-width:100%;max-height:100%;object-fit:contain;"});
+      imgwin.appendChild(img);
+      getDownloadUrl(photos[0]).then(url=>{ if(url) img.src=url; });
+    }
+    box.appendChild(imgwin);
+
+    box.appendChild(el("div",{text: (active==="q") ? "質問内容（ここだけ縦スクロール可）" : "回答内容（ここだけ縦スクロール可）", style:"color:#b8b8b8;font-weight:900;margin-bottom:6px;"}));
+    const pre = el("div",{style:"white-space:pre-wrap;color:#eee;font-weight:700;user-select:text;"});
+    pre.textContent = side.text || "";
+    box.appendChild(pre);
+
+    tQ.set(active==="q"); tA.set(active==="a");
+  }
+
+  function paintRight(){
+    if (state.modeAnswer==="new") {
+      btnNew.style.background="#0af"; btnNew.style.color="#000";
+      btnEdit.style.background="#1c1c1c"; btnEdit.style.color="#fff";
+    } else {
+      btnEdit.style.background="#0af"; btnEdit.style.color="#000";
+      btnNew.style.background="#1c1c1c"; btnNew.style.color="#fff";
+    }
+    if (state.currentQData) {
+      responderSel.value = state.currentQData.answer.responder || "";
+      ansText.value = state.currentQData.answer.text || "";
+    }
+  }
+
+  function selStyle(){ return "flex:1;height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function taStyle(){ return "flex:1;min-height:160px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;resize:none;"; }
+  function fileStyle(){ return "height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function btnStyle(bg,fg,h){ return `height:${h}px;border-radius:14px;border:2px solid #2a2a2a;background:${bg};color:${fg};font-weight:900;font-size:18px;cursor:pointer;white-space:nowrap;padding:0 18px;`; }
+  function tabBtn(name, sel, fn){
+    const b = el("button",{text:name, style:`padding:10px 14px;border-radius:999px;border:2px solid #2a2a2a;background:${sel?"#0af":"#151515"};color:${sel?"#000":"#fff"};font-weight:900;cursor:pointer;`});
+    b.addEventListener("click", fn);
+    return { btn:b, set:(on)=>{ b.style.background=on?"#0af":"#151515"; b.style.color=on?"#000":"#fff"; } };
+  }
+}
+
+function render(){
+  $app.innerHTML = "";
+  let node = null;
+  if (state.route==="home") node = renderHome();
+  else if (state.route==="answer") node = renderAnswer();
+  else if (state.route==="ask") node = renderAsk();
+  else if (state.route==="history") node = renderHistory();
+  else if (state.route==="export") node = renderExport();
+  else { state.route="home"; node = renderHome(); }
+  $app.appendChild(node);
 }
 
 /* ====== Boot ====== */
 (async function boot(){
-  await ensureMsalReady();
-
-  // 起動時にログイン済みならサイレント取得→一覧構築
-  // 未ログインならホームは出るが、実操作時にログイン誘導される
   try {
+    await ensureMsalReady();
+
+    // ログイン済みなら一覧構築（未ログインでもホームは出す）
     const acc = getAccount();
     if (acc) {
       await getAccessToken();
       await rebuildIndex();
     }
+
+    render();
   } catch (e) {
-    // redirecting / not logged-in などは無視
+    // ここで止まると黒画面になるので必ずfatal表示
+    fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
-
-  // 最初はとりあえず描画
-  render();
-
-  // ユーザがどこか押した時に認証が必要なら誘導
-  // ただし “自動で毎回ログイン画面” は避けたいので、基本は silent を優先
-  $app.addEventListener("click", async (ev)=>{
-    const need = ["answer","ask","history","export"].includes(state.route);
-    if (!need) return;
-    const acc = getAccount();
-    if (!acc) return; // ボタン押下時に各API呼び出しでredirectされるのでここは静かに
-  });
 })();
