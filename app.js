@@ -1,22 +1,25 @@
 /* =========================
-   フロンティアQ&A - GitHub Pages版（UI復旧版）
-   - 元アプリ寄せのレイアウト（4分割ホーム / 2ペイン画面）
-   - 「SharePointに接続」ボタン追加（未ログイン時）
-   - 通知（ベル）モーダル（閲覧者に紐づくQを一覧）
-   - 写真ウィンドウの「- / 等倍 / +」は廃止（要件通り）
+   フロンティアQ&A - GitHub Pages版（堅牢版）
+   - 黒画面防止（例外を画面に表示）
+   - 出力選択は仕様未実装でOK（プレースホルダー）
 ========================= */
 
+/* ====== Entra / SharePoint 設定 ====== */
 const TENANT_ID = "8fba5de9-6507-44de-b9b2-35abc69bb880";
 const CLIENT_ID = "329441a8-3466-4f0f-b3e1-dca0e3a0c277";
 const REDIRECT_URI = "https://asaganaiyorumonai.github.io/qna-fcp/";
 const SHAREPOINT_SITE_PATH = "shigecreator.sharepoint.com:/sites/allcompany";
 const DOC_ROOT_PATH = "Q&A_Picture_and_text";
+
+/* 必要スコープ（Admin consent 推奨） */
 const SCOPES = ["User.Read", "Sites.ReadWrite.All"];
 
+/* ====== 選択肢 ====== */
 const ASKER_OPTS = ["平野さん　FCP","重川さん　宇井建設","山下さん　宇井建設","傳田さん　宇井建設","佐藤さん　エンジン","小関さん　エンジン","川名さん　エンジン","白根さん　エンジン"];
 const SECTION_OPTS = ["二重床施工前","二重床","LGS","鉄板下地","木下地","石膏ボード","長尺シート","クロス","Pタイル","玄関タイル","フローリング","墨チェック（下地）","墨チェック（点検口）"];
 const RESPONDER_OPTS = ["高橋さん　SC","中村さん　SC","平野さん　FCP","重川さん　宇井建設","山下さん　宇井建設","傳田さん　エンジン","佐藤さん　エンジン","小関さん　エンジン","川名さん　エンジン","白根さん　エンジン"];
 
+/* ====== UI State ====== */
 const state = {
   viewer: localStorage.getItem("qa_viewer") || "ゲスト",
   route: "home",
@@ -28,38 +31,36 @@ const state = {
   currentQ: null,
   currentQData: null,
   modeAnswer: "new",
-  modalOpen: false,
-  isAuthed: false,
+  modeAsk: "new",
 };
 
 const $app = document.getElementById("app");
 
-/* ====== error surface ====== */
+/* ====== 黒画面防止：エラーを画面に出す ====== */
 function fatal(title, detail) {
   $app.innerHTML = `
-    <div class="app">
-      <div class="topbar"><div class="title">フロンティアQ&A</div></div>
-      <div class="wrap">
-        <div class="container">
-          <div class="panel" style="min-height:auto;">
-            <div class="pageTitle">${esc(title)}</div>
-            <div class="scrollBox"><div class="pre">${esc(detail || "")}</div></div>
-            <div class="row">
-              <button class="btn" onclick="location.reload()">再読み込み</button>
-              <button class="btn" onclick="navigator.clipboard.writeText(document.querySelector('.pre').innerText)">エラーをコピー</button>
-            </div>
-          </div>
+    <div style="height:100dvh;display:flex;align-items:center;justify-content:center;padding:16px;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;">
+      <div style="width:min(880px,92vw);border:1px solid #2a2a2a;border-radius:16px;background:#101010;padding:18px;">
+        <div style="font-weight:900;font-size:18px;margin-bottom:10px;">${escapeHtml(title)}</div>
+        <pre style="white-space:pre-wrap;color:#b8b8b8;margin:0;user-select:text;">${escapeHtml(detail || "")}</pre>
+        <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
+          <button style="padding:10px 14px;border-radius:12px;border:1px solid #2a2a2a;background:#1c1c1c;color:#fff;font-weight:800;cursor:pointer;" onclick="location.reload()">再読み込み</button>
+          <button style="padding:10px 14px;border-radius:12px;border:1px solid #2a2a2a;background:#1c1c1c;color:#fff;font-weight:800;cursor:pointer;" onclick="navigator.clipboard.writeText(document.querySelector('pre').innerText)">エラーをコピー</button>
         </div>
       </div>
-    </div>`;
+    </div>
+  `;
 }
-function esc(s){ return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function escapeHtml(s){ return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 window.addEventListener("error", (e)=>{
+  // 拡張機能のエラーは無視（bybit/evm系がうるさい）
   const msg = String(e.message || "");
   if (/evm|bybit|ethereum/i.test(msg)) return;
   fatal("実行エラーが発生しました", `${msg}\n${e.filename||""}:${e.lineno||""}:${e.colno||""}`);
 });
+
 window.addEventListener("unhandledrejection", (e)=>{
   const msg = String(e.reason || "");
   if (/evm|bybit|ethereum/i.test(msg)) return;
@@ -68,8 +69,12 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 /* ====== MSAL ====== */
 function ensureMsalLoaded() {
-  if (window.__MSAL_LOAD_ERROR__) throw new Error("MSALの読み込みに失敗しました\n" + window.__MSAL_LOAD_ERROR__);
-  if (!window.msal || !window.msal.PublicClientApplication) throw new Error("MSALが読み込めていません（Shield/広告ブロックの可能性）");
+  if (window.__MSAL_LOAD_ERROR__) {
+    throw new Error("MSALの読み込みに失敗しました（CDNブロックの可能性）\n" + window.__MSAL_LOAD_ERROR__);
+  }
+  if (!window.msal || !window.msal.PublicClientApplication) {
+    throw new Error("MSALが読み込めていません（広告ブロッカー/Shield等でCDNが止まっている可能性）");
+  }
 }
 
 const msalConfig = {
@@ -106,7 +111,6 @@ async function getAccessToken() {
   if (!acc) return loginRedirect();
   try {
     const res = await msalApp.acquireTokenSilent({ account: acc, scopes: SCOPES });
-    state.isAuthed = true;
     return res.accessToken;
   } catch {
     return loginRedirect();
@@ -116,17 +120,25 @@ async function getAccessToken() {
 /* ====== Graph ====== */
 async function graphFetch(url, { method="GET", headers={}, body=null } = {}) {
   const token = await getAccessToken();
-  const res = await fetch(url, { method, headers: { "Authorization": `Bearer ${token}`, ...headers }, body });
+  const res = await fetch(url, {
+    method,
+    headers: { "Authorization": `Bearer ${token}`, ...headers },
+    body,
+  });
   if (!res.ok) {
-    const t = await res.text().catch(()=> "");
+    const t = await res.text().catch(()=>"");
     throw new Error(`Graph ${res.status}: ${t}`);
   }
   return res;
 }
-function encPath(p){ return p.split("/").map(encodeURIComponent).join("/"); }
+
+function encPath(p) {
+  return p.split("/").map(encodeURIComponent).join("/");
+}
 
 async function ensureSiteAndDrive() {
   if (state.siteId && state.driveId) return;
+
   const siteRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${SHAREPOINT_SITE_PATH}`);
   const site = await siteRes.json();
   state.siteId = site.id;
@@ -136,7 +148,7 @@ async function ensureSiteAndDrive() {
   state.driveId = drive.id;
 }
 
-/* ====== SharePoint IO ====== */
+/* ====== SharePoint file helpers ====== */
 function qFolder(q) { return `${DOC_ROOT_PATH}/Q/Q${q}`; }
 function aFolder(q) { return `${DOC_ROOT_PATH}/A/A${q}`; }
 function qJsonPath(q){ return `${qFolder(q)}/Q${q}.json`; }
@@ -151,16 +163,19 @@ async function listChildren(path) {
   const j = await res.json();
   return (j.value || []);
 }
+
 async function downloadText(path) {
   await ensureSiteAndDrive();
   const p = encPath(path);
   const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}:/content`);
   return await res.text();
 }
+
 async function downloadJson(path) {
   const t = await downloadText(path);
   try { return JSON.parse(t); } catch { return {}; }
 }
+
 async function uploadText(path, text) {
   await ensureSiteAndDrive();
   const p = encPath(path);
@@ -170,6 +185,7 @@ async function uploadText(path, text) {
     body: text ?? "",
   });
 }
+
 async function uploadJson(path, obj) {
   await ensureSiteAndDrive();
   const p = encPath(path);
@@ -179,6 +195,7 @@ async function uploadJson(path, obj) {
     body: JSON.stringify(obj ?? {}, null, 2),
   });
 }
+
 async function uploadBinary(path, blob, contentType) {
   await ensureSiteAndDrive();
   const p = encPath(path);
@@ -188,6 +205,7 @@ async function uploadBinary(path, blob, contentType) {
     body: blob,
   });
 }
+
 async function getDownloadUrl(path) {
   await ensureSiteAndDrive();
   const p = encPath(path);
@@ -196,7 +214,7 @@ async function getDownloadUrl(path) {
   return j["@microsoft.graph.downloadUrl"] || null;
 }
 
-/* ===== utils ===== */
+/* ====== Utility ====== */
 function nowJstString() {
   const d = new Date();
   const jst = new Date(d.getTime() + 9*60*60*1000);
@@ -214,9 +232,14 @@ function fmtDateJP(s) {
   if (!m) return String(s);
   return `${Number(m[1])}年${Number(m[2])}月${Number(m[3])}日`;
 }
-function excerpt(s, n=22) {
+function excerpt(s, n=16) {
   const t = (s || "").replace(/\r/g,"").replace(/\n/g," ");
   return t.length>n ? t.slice(0,n)+"…" : t;
+}
+function splitNameCompany(s) {
+  const i = (s || "").indexOf("　");
+  if (i>=0) return [s.slice(0,i), s.slice(i+1)];
+  return [s||"", ""];
 }
 function normName(s) {
   return (s||"").replace(/　/g,"").replace(/ /g,"").replace(/さん/g,"");
@@ -226,8 +249,10 @@ function askerMatchesViewer(asker, viewer) {
   return normName(asker).includes(normName(viewer));
 }
 
-/* ===== index build ===== */
+/* ====== Index build ====== */
 async function rebuildIndex() {
+  await ensureSiteAndDrive();
+
   const qDirs = await listChildren(`${DOC_ROOT_PATH}/Q`);
   const qNums = qDirs
     .filter(x => x.folder && /^Q\d+$/.test(x.name))
@@ -252,6 +277,7 @@ async function rebuildIndex() {
     const aDate = aj && aj.last_updated ? aj.last_updated : "";
 
     if (!aDate) unanswered++;
+
     idx.push({ q, qDate, asker, section, aDate, text: qt || "" });
   }
 
@@ -267,9 +293,7 @@ function buildNotificationsForViewer(viewer) {
     items.push({
       q: r.q,
       status: r.aDate ? "seen" : "unanswered",
-      excerpt: excerpt(r.text, 26),
-      date: r.qDate,
-      section: r.section
+      excerpt: excerpt(r.text, 22),
     });
   }
   items.sort((a,b)=>{
@@ -279,7 +303,7 @@ function buildNotificationsForViewer(viewer) {
   return items;
 }
 
-/* ===== Q details ===== */
+/* ====== Q details ====== */
 async function loadQFull(q) {
   let qj = {}, qt = "";
   try { qj = await downloadJson(qJsonPath(q)); } catch {}
@@ -290,7 +314,11 @@ async function loadQFull(q) {
   const qPhotos = qFiles
     .filter(x => x.file && new RegExp(`^Q${q}-\\d+\\.(png|jpg|jpeg|webp|bmp|tif|tiff|heic|heif|gif)$`, "i").test(x.name))
     .map(x => `${qFolder(q)}/${x.name}`)
-    .sort((a,b)=> (Number((a.match(/-(\d+)\./)||[])[1]||0) - Number((b.match(/-(\d+)\./)||[])[1]||0)));
+    .sort((a,b)=>{
+      const na = Number((a.match(/-(\d+)\./)||[])[1]||0);
+      const nb = Number((b.match(/-(\d+)\./)||[])[1]||0);
+      return na-nb;
+    });
 
   let aj = null, at = "";
   try { aj = await downloadJson(aJsonPath(q)); } catch { aj = null; }
@@ -301,7 +329,11 @@ async function loadQFull(q) {
   const aPhotos = aFiles
     .filter(x => x.file && new RegExp(`^A${q}-\\d+\\.(png|jpg|jpeg|webp|bmp|tif|tiff|heic|heif|gif)$`, "i").test(x.name))
     .map(x => `${aFolder(q)}/${x.name}`)
-    .sort((a,b)=> (Number((a.match(/-(\d+)\./)||[])[1]||0) - Number((b.match(/-(\d+)\./)||[])[1]||0)));
+    .sort((a,b)=>{
+      const na = Number((a.match(/-(\d+)\./)||[])[1]||0);
+      const nb = Number((b.match(/-(\d+)\./)||[])[1]||0);
+      return na-nb;
+    });
 
   state.currentQData = {
     question: { date: qj.last_updated||"", asker: qj.author||"", section: qj.location||"", text: qt||"", photos: qPhotos },
@@ -309,7 +341,7 @@ async function loadQFull(q) {
   };
 }
 
-/* ===== create/update ===== */
+/* ====== Create/Update ====== */
 async function createQuestion({ asker, section, text, files }) {
   const maxQ = state.qIndex.reduce((m,r)=>Math.max(m, r.q), 0);
   const q = maxQ + 1;
@@ -371,8 +403,8 @@ async function upsertAnswer(q, { responder, text, files, mode }) {
   await rebuildIndex();
 }
 
-/* ===== DOM helpers ===== */
-function h(tag, attrs={}, children=[]) {
+/* ====== Small UI helpers ====== */
+function el(tag, attrs={}, children=[]) {
   const e = document.createElement(tag);
   for (const [k,v] of Object.entries(attrs||{})) {
     if (k==="class") e.className = v;
@@ -387,210 +419,144 @@ function h(tag, attrs={}, children=[]) {
   return e;
 }
 
-function renderShell(contentNode, pageTitle=null) {
-  const app = h("div",{class:"app"});
-  const top = h("div",{class:"topbar"},[
-    h("div",{class:"left"},[
-      state.route!=="home"
-        ? h("button",{class:"btn", text:"← 前のページに戻る", onclick:()=>{ state.route="home"; state.currentQ=null; state.currentQData=null; render(); }})
-        : null
-    ]),
-    h("div",{class:"title", text: (state.route==="home" ? "ホーム" : pageTitle || "")}),
-    h("div",{class:"right"},[
-      // 閲覧者
-      h("div",{},[
-        h("span",{class:"note", text: (state.viewer==="ゲスト" ? "ゲストとして閲覧中" : `${state.viewer} として閲覧中`)})
-      ]),
-      viewerSelect(),
-      // ベル
-      h("button",{class:"btn", text:"🔔", onclick:()=>{ state.modalOpen = !state.modalOpen; render(); }}),
-      // 接続ボタン（未ログイン）
-      (!state.isAuthed ? h("button",{class:"btn primary", text:"SharePointに接続", onclick: async ()=>{
-        await loginRedirect();
-      }}) : null),
-    ])
-  ]);
+function renderHeader(title, backFn=null) {
+  const hdr = el("div",{style:"height:56px;display:flex;align-items:center;justify-content:center;position:relative;border-bottom:1px solid #2a2a2a;background:#0e0e0e;font-weight:900;font-size:20px;"});
+  hdr.appendChild(el("div",{text:title}));
+  if (backFn) {
+    const b = el("button",{text:"← 前のページに戻る", style:"position:absolute;left:12px;top:10px;padding:10px 14px;border-radius:12px;border:1px solid #2a2a2a;background:#151515;color:#fff;font-weight:800;cursor:pointer;", onclick:backFn});
+    hdr.appendChild(b);
+  }
+  return hdr;
+}
 
-  app.appendChild(top);
-
-  const wrap = h("div",{class:"wrap"},[
-    h("div",{class:"container"},[
-      state.route==="home" ? contentNode : h("div",{},[
-        h("div",{class:"pageTitle", text: pageTitle || ""}),
-        contentNode
+/* ====== Pages ====== */
+function renderHome() {
+  const page = el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
+    renderHeader("ホーム"),
+    el("div",{style:"flex:1;display:flex;flex-direction:column;gap:12px;padding:12px;"},[
+      el("div",{text:"٩('ω')9フロンティアQ&A アプリ版！！", style:"text-align:center;font-weight:900;font-size:34px;"}),
+      el("div",{style:"flex:1;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:12px;min-height:0;"},[
+        cardBtn("回答する", `回答待ち：${state.unansweredCount}件`, async ()=>{ state.route="answer"; render(); }),
+        cardBtn("質問する","", ()=>{ state.route="ask"; render(); }),
+        cardBtn("出力選択","（中身は未実装でOK）", ()=>{ state.route="export"; render(); }),
+        cardBtn("過去の質問を見る","", ()=>{ state.route="history"; render(); }),
       ])
     ])
   ]);
-  app.appendChild(wrap);
+  return page;
 
-  if (state.modalOpen) app.appendChild(renderNotifModal());
-  return app;
-
-  function viewerSelect(){
-    const sel = h("select",{class:"select"});
-    ["ゲスト", ...ASKER_OPTS.map(v=>v.split("　")[0])].forEach(v=>{
-      const opt = h("option",{value:v, text:v});
-      if (v===state.viewer) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    sel.addEventListener("change", ()=>{
-      state.viewer = sel.value;
-      localStorage.setItem("qa_viewer", state.viewer);
-      state.notifItems = buildNotificationsForViewer(state.viewer);
-      render();
-    });
-    return sel;
-  }
-}
-
-function renderNotifModal(){
-  const bg = h("div",{class:"modalBg", onclick:(e)=>{ if (e.target===bg){ state.modalOpen=false; render(); }}});
-  const m = h("div",{class:"modal"},[
-    h("div",{class:"modalHead"},[
-      h("div",{class:"modalTitle", text:"通知"}),
-      h("button",{class:"btn", text:"閉じる", onclick:()=>{ state.modalOpen=false; render(); }})
-    ]),
-    h("div",{class:"note", text: (!state.isAuthed ? "※SharePoint未接続のため通知を取得できません" :
-      (state.viewer==="ゲスト" ? "※閲覧者がゲストです（通知なし）" : ""))}),
-    h("div",{class:"list"},[
-      ...renderNotifItems()
-    ])
-  ]);
-  bg.appendChild(m);
-  return bg;
-
-  function renderNotifItems(){
-    if (!state.isAuthed) return [h("div",{class:"item"},[h("div",{class:"tx", text:"通知はありません"})])];
-    if (state.viewer==="ゲスト") return [h("div",{class:"item"},[h("div",{class:"tx", text:"通知はありません"})])];
-    if (!state.notifItems.length) return [h("div",{class:"item"},[h("div",{class:"tx", text:"通知はありません"})])];
-
-    return state.notifItems.slice(0,30).map(it=>{
-      const pillClass = it.status==="unanswered" ? "pill warn" : "pill";
-      const pillText = it.status==="unanswered" ? "未回答" : "確認済";
-      const row = h("div",{class:"item", onclick: async ()=>{
-        state.modalOpen=false;
-        state.route="answer";
-        state.currentQ = it.q;
-        await loadQFull(it.q);
-        render();
-      }},[
-        h("div",{class:pillClass, text:pillText}),
-        h("div",{},[
-          h("div",{class:"tx", text:`Q${it.q}　${fmtDateJP(it.date)}　${it.section}`}),
-          h("div",{class:"sub", text:it.excerpt})
-        ])
-      ]);
-      return row;
-    });
-  }
-}
-
-/* ===== Pages ===== */
-function pageHome(){
-  const hero = h("div",{class:"hero", text:"٩('ω')9フロンティアQ&A アプリ版！！"});
-  const grid = h("div",{class:"grid4"},[
-    homeCard("回答する", `回答待ち：${state.isAuthed ? state.unansweredCount : "?"}件`, ()=>{ state.route="answer"; render(); }),
-    homeCard("質問する", "", ()=>{ state.route="ask"; render(); }),
-    homeCard("出力選択", "", ()=>{ state.route="export"; render(); }),
-    homeCard("過去の質問を見る", "", ()=>{ state.route="history"; render(); }),
-  ]);
-  const node = h("div",{},[hero, grid]);
-  return renderShell(node, "ホーム");
-
-  function homeCard(title, sub, onClick){
-    const c = h("div",{class:"card", onclick:onClick},[
-      h("div",{class:"cardTitle", text:title}),
-      sub ? h("div",{class:"cardSub", text:sub}) : null
-    ]);
+  function cardBtn(t, sub, fn){
+    const c = el("div",{style:"border:2px solid #2a2a2a;border-radius:18px;background:#1c1c1c;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;gap:8px;"});
+    c.appendChild(el("div",{text:t, style:"color:#3dd2ff;font-weight:900;font-size:28px;"}));
+    if (sub) c.appendChild(el("div",{text:sub, style:"color:#b8b8b8;font-weight:700;"}));
+    c.addEventListener("click", fn);
     return c;
   }
 }
 
-function pageExport(){
-  const node = h("div",{class:"panel", style:"min-height:auto;"},[
-    h("div",{class:"note", text:"この画面は仕様どおり中身は未実装でOKです。"})
+function renderExport() {
+  return el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
+    renderHeader("出力選択", ()=>{ state.route="home"; render(); }),
+    el("div",{style:"padding:16px;color:#b8b8b8;font-weight:800;"},[
+      "この画面は仕様どおり中身は未実装でOKです。"
+    ])
   ]);
-  return renderShell(node, "出力選択");
 }
 
-function pageHistory(){
-  const askerSel = h("select",{class:"select grow"},[
-    h("option",{value:"", text:"質問者（任意）"}),
-    ...ASKER_OPTS.map(v=>h("option",{value:v, text:v}))
+function renderHistory() {
+  const page = el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
+    renderHeader("過去の質問を見る", ()=>{ state.route="home"; render(); }),
   ]);
-  const sectionSel = h("select",{class:"select grow"},[
-    h("option",{value:"", text:"検査箇所（任意）"}),
-    ...SECTION_OPTS.map(v=>h("option",{value:v, text:v}))
-  ]);
-  const btn = h("button",{class:"btn primary", text:"検索", onclick:()=>paint()});
-  const list = h("div",{class:"scrollBox"});
 
-  const node = h("div",{class:"panel", style:"min-height:auto;"},[
-    h("div",{class:"row"},[askerSel, sectionSel, btn]),
-    list
+  const wrap = el("div",{style:"flex:1;display:flex;flex-direction:column;gap:10px;padding:12px;min-height:0;"});
+  const askerSel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"質問者（任意）"}),
+    ...ASKER_OPTS.map(v=>el("option",{value:v, text:v}))
   ]);
+  const sectionSel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"検査箇所（任意）"}),
+    ...SECTION_OPTS.map(v=>el("option",{value:v, text:v}))
+  ]);
+  const btn = el("button",{text:"検索", style:btnStyle("#0af","#000"), onclick:()=>paint()});
+  const top = el("div",{style:"display:flex;gap:10px;"},[askerSel, sectionSel, btn]);
+  const list = el("div",{style:"flex:1;min-height:0;overflow:auto;border:1px solid #2a2a2a;border-radius:14px;background:#0d0d0d;"});
+
+  wrap.appendChild(top);
+  wrap.appendChild(list);
+  page.appendChild(wrap);
 
   paint();
-  return renderShell(node, "過去の質問を見る");
+  return page;
 
   function paint(){
-    list.innerHTML = "";
-    if (!state.isAuthed){
-      list.appendChild(h("div",{class:"note", text:"SharePointに接続すると一覧が表示されます（右上の「SharePointに接続」）。"}));
-      return;
-    }
-
     const a = askerSel.value;
     const s = sectionSel.value;
     let rows = state.qIndex.slice();
     if (a) rows = rows.filter(r=>r.asker===a);
     if (s) rows = rows.filter(r=>r.section===s);
 
-    const head = h("div",{class:"note", text:"Q番号 / 日付 / 質問者 / 質問内容（クリックで表示）"});
+    list.innerHTML = "";
+    const head = el("div",{style:"display:grid;grid-template-columns:90px 170px 160px 1fr;gap:8px;padding:10px;border-bottom:1px solid #222;color:#bbb;font-weight:900;"},[
+      el("div",{text:"Q番号"}), el("div",{text:"日付"}), el("div",{text:"質問者"}), el("div",{text:"質問内容"})
+    ]);
     list.appendChild(head);
 
-    rows.sort((x,y)=>y.q-x.q).slice(0,300).forEach(r=>{
-      const it = h("div",{class:"item", onclick: async ()=>{
+    for (const r of rows.sort((x,y)=>y.q-x.q).slice(0,250)) {
+      const row = el("div",{style:"display:grid;grid-template-columns:90px 170px 160px 1fr;gap:8px;padding:10px;border-bottom:1px solid #222;cursor:pointer;"},[
+        el("div",{text:`Q${r.q}`}),
+        el("div",{text:fmtDateJP(r.qDate)}),
+        el("div",{text:splitNameCompany(r.asker)[0]}),
+        el("div",{text:excerpt(r.text, 70)}),
+      ]);
+      row.addEventListener("click", async ()=>{
         state.route="answer";
         state.currentQ = r.q;
         await loadQFull(r.q);
         render();
-      }},[
-        h("div",{class:"pill", text:`Q${r.q}`}),
-        h("div",{},[
-          h("div",{class:"tx", text:`${fmtDateJP(r.qDate)}　${r.asker}　${r.section}`}),
-          h("div",{class:"sub", text:excerpt(r.text, 80)})
-        ])
-      ]);
-      list.appendChild(it);
-    });
+      });
+      list.appendChild(row);
+    }
   }
+
+  function selStyle(){ return "flex:1;height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function btnStyle(bg,fg){ return `height:52px;border-radius:12px;border:2px solid #2a2a2a;background:${bg};color:${fg};padding:0 18px;font-weight:900;cursor:pointer;white-space:nowrap;`; }
 }
 
-function pageAsk(){
-  const imgbox = h("div",{class:"imgbox"},[h("div",{class:"note", text:"写真が登録されていません"})]);
-  const askerSel = h("select",{class:"input"},[
-    h("option",{value:"", text:"質問者"}),
-    ...ASKER_OPTS.map(v=>h("option",{value:v, text:v}))
+function renderAsk() {
+  const page = el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
+    renderHeader("質問する", ()=>{ state.route="home"; render(); }),
   ]);
-  const sectionSel = h("select",{class:"input"},[
-    h("option",{value:"", text:"検査箇所"}),
-    ...SECTION_OPTS.map(v=>h("option",{value:v, text:v}))
-  ]);
-  const txt = h("textarea",{class:"textarea", placeholder:"質問内容"});
-  const file = h("input",{class:"file", type:"file", multiple:"multiple", accept:"image/*"});
 
+  const row = el("div",{style:"flex:1;display:flex;gap:12px;padding:12px;min-height:0;"});
+  const left = el("div",{style:"flex:1;border:2px solid #2a2a2a;border-radius:18px;background:#101010;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0;"});
+  const right= el("div",{style:"flex:1;border:2px solid #2a2a2a;border-radius:18px;background:#101010;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0;"});
+
+  const imgwin = el("div",{style:"flex:1;min-height:240px;border-radius:14px;border:1px solid #333;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;"},[
+    el("div",{text:"写真が登録されていません", style:"color:#888;font-weight:900;"})
+  ]);
+  left.appendChild(imgwin);
+  left.appendChild(el("div",{text:"※写真を登録しなくても質問の投稿はできます", style:"color:#b8b8b8;font-weight:800;"}));
+
+  const askerSel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"質問者"}),
+    ...ASKER_OPTS.map(v=>el("option",{value:v, text:v}))
+  ]);
+  const sectionSel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"検査箇所"}),
+    ...SECTION_OPTS.map(v=>el("option",{value:v, text:v}))
+  ]);
+  const txt = el("textarea",{style:taStyle(), placeholder:"質問内容"});
+  const file = el("input",{type:"file", multiple:"multiple", accept:"image/*", style:fileStyle()});
   file.addEventListener("change", ()=>{
     const f0 = file.files && file.files[0];
     if (!f0) return;
-    imgbox.innerHTML = "";
-    const img = h("img",{});
-    imgbox.appendChild(img);
+    imgwin.innerHTML = "";
+    const img = el("img",{style:"max-width:100%;max-height:100%;object-fit:contain;"});
+    imgwin.appendChild(img);
     img.src = URL.createObjectURL(f0);
   });
 
-  const submit = h("button",{class:"btn primary", text:"投稿する", onclick: async ()=>{
-    if (!state.isAuthed) return alert("先に右上の「SharePointに接続」を押してログインしてください。");
+  const submit = el("button",{text:"投稿する", style:btnStyle("#0af","#000"), onclick: async ()=>{
     if (!askerSel.value) return alert("質問者を選択してください");
     if (!sectionSel.value) return alert("検査箇所を選択してください");
     const q = await createQuestion({ asker:askerSel.value, section:sectionSel.value, text:txt.value||"", files:file.files });
@@ -600,32 +566,39 @@ function pageAsk(){
     render();
   }});
 
-  const left = h("div",{class:"panel"},[
-    imgbox,
-    h("div",{class:"note", text:"※写真を登録しなくても質問の投稿はできます"})
-  ]);
-  const right= h("div",{class:"panel"},[
-    h("div",{class:"row"},[askerSel, sectionSel]),
-    txt,
-    file,
-    submit
-  ]);
+  right.appendChild(askerSel);
+  right.appendChild(sectionSel);
+  right.appendChild(txt);
+  right.appendChild(file);
+  right.appendChild(submit);
 
-  const node = h("div",{class:"panel2"},[left,right]);
-  return renderShell(node, "質問する");
+  row.appendChild(left);
+  row.appendChild(right);
+  page.appendChild(row);
+  return page;
+
+  function selStyle(){ return "height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function taStyle(){ return "flex:1;min-height:140px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;resize:none;"; }
+  function fileStyle(){ return "height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function btnStyle(bg,fg){ return `height:64px;border-radius:14px;border:2px solid #2a2a2a;background:${bg};color:${fg};font-weight:900;font-size:20px;cursor:pointer;`; }
 }
 
-function pageAnswer(){
-  const sel = h("select",{class:"input grow"});
-  sel.appendChild(h("option",{value:"", text:"回答待ちの質問を選択"}));
-  if (state.isAuthed){
-    state.qIndex.filter(r=>!r.aDate).sort((a,b)=>b.q-a.q).forEach(r=>{
-      sel.appendChild(h("option",{value:String(r.q), text:`Q${r.q}　${fmtDateJP(r.qDate)}　${r.asker}　${r.section}`}));
-    });
-  }
+function renderAnswer() {
+  const page = el("div",{style:"height:100dvh;display:flex;flex-direction:column;background:#0b0b0b;color:#fafafa;font-family:system-ui,sans-serif;"},[
+    renderHeader("回答する", ()=>{ state.route="home"; state.currentQ=null; state.currentQData=null; render(); }),
+  ]);
 
-  const showBtn = h("button",{class:"btn", text:"表示", onclick: async ()=>{
-    if (!state.isAuthed) return alert("先に右上の「SharePointに接続」でログインしてください。");
+  const row = el("div",{style:"flex:1;display:flex;gap:12px;padding:12px;min-height:0;"});
+  const left = el("div",{style:"flex:1;border:2px solid #2a2a2a;border-radius:18px;background:#101010;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0;"});
+  const right= el("div",{style:"flex:1;border:2px solid #2a2a2a;border-radius:18px;background:#101010;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0;"});
+
+  const sel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"回答待ちの質問を選択"}),
+    ...state.qIndex.filter(r=>!r.aDate).sort((a,b)=>b.q-a.q).map(r =>
+      el("option",{value:String(r.q), text:`Q${r.q}　${fmtDateJP(r.qDate)}　${splitNameCompany(r.asker)[0]}　${r.section}`})
+    )
+  ]);
+  const showBtn = el("button",{text:"表示", style:btnStyle("#0af","#000",52), onclick: async ()=>{
     const q = Number(sel.value||0);
     if (!q) return;
     state.currentQ=q;
@@ -633,32 +606,32 @@ function pageAnswer(){
     paintLeft();
     paintRight();
   }});
+  left.appendChild(el("div",{style:"display:flex;gap:10px;"},[sel, showBtn]));
 
-  const tabs = h("div",{class:"tabs"});
-  const tabQ = h("button",{class:"tab on", text:"質問", onclick:()=>{ active="q"; paintLeft(); }});
-  const tabA = h("button",{class:"tab", text:"回答", onclick:()=>{ active="a"; paintLeft(); }});
-  tabs.appendChild(tabQ); tabs.appendChild(tabA);
+  const tabs = el("div",{style:"display:flex;gap:10px;"});
+  const tQ = tabBtn("質問", true, ()=>{ active="q"; paintLeft(); });
+  const tA = tabBtn("回答", false, ()=>{ active="a"; paintLeft(); });
+  tabs.appendChild(tQ.btn); tabs.appendChild(tA.btn);
+  left.appendChild(tabs);
 
-  const box = h("div",{class:"scrollBox"});
-  const left = h("div",{class:"panel"},[
-    h("div",{class:"row"},[sel, showBtn]),
-    tabs,
-    box
-  ]);
+  const box = el("div",{style:"flex:1;min-height:0;overflow:auto;border:1px solid #2a2a2a;border-radius:14px;background:#0d0d0d;padding:10px;"});
+  left.appendChild(box);
 
   let active = "q";
 
-  const btnNew = h("button",{class:"btn primary", text:"新規", onclick:()=>{state.modeAnswer="new"; paintRight();}});
-  const btnEdit= h("button",{class:"btn", text:"編集", onclick:()=>{state.modeAnswer="edit"; paintRight();}});
-  const responderSel = h("select",{class:"input"},[
-    h("option",{value:"", text:"回答者"}),
-    ...RESPONDER_OPTS.map(v=>h("option",{value:v, text:v}))
+  const responderSel = el("select",{style:selStyle()},[
+    el("option",{value:"", text:"回答者"}),
+    ...RESPONDER_OPTS.map(v=>el("option",{value:v, text:v}))
   ]);
-  const ansText = h("textarea",{class:"textarea", placeholder:"回答内容"});
-  const file = h("input",{class:"file", type:"file", multiple:"multiple", accept:"image/*"});
+  const ansText = el("textarea",{style:taStyle(), placeholder:"回答内容"});
+  const file = el("input",{type:"file", multiple:"multiple", accept:"image/*", style:fileStyle()});
 
-  const submit = h("button",{class:"btn primary", text:"この内容で回答する", onclick: async ()=>{
-    if (!state.isAuthed) return alert("先に右上の「SharePointに接続」でログインしてください。");
+  const modeWrap = el("div",{style:"display:flex;gap:10px;"});
+  const btnNew = el("button",{text:"新規", style:btnStyle("#0af","#000",52), onclick:()=>{state.modeAnswer="new"; paintRight();}});
+  const btnEdit= el("button",{text:"編集", style:btnStyle("#1c1c1c","#fff",52), onclick:()=>{state.modeAnswer="edit"; paintRight();}});
+  modeWrap.appendChild(btnNew); modeWrap.appendChild(btnEdit);
+
+  const submit = el("button",{text:"この内容で回答する", style:btnStyle("#00ff66","#000",64), onclick: async ()=>{
     const q = state.currentQ;
     if (!q) return alert("Qを選択してください");
     if (!responderSel.value) return alert("回答者を選択してください");
@@ -668,100 +641,100 @@ function pageAnswer(){
     paintRight();
   }});
 
-  const right = h("div",{class:"panel"},[
-    h("div",{class:"row"},[btnNew, btnEdit]),
-    responderSel,
-    ansText,
-    file,
-    submit
-  ]);
+  right.appendChild(modeWrap);
+  right.appendChild(responderSel);
+  right.appendChild(ansText);
+  right.appendChild(file);
+  right.appendChild(submit);
 
-  const node = h("div",{class:"panel2"},[left,right]);
+  row.appendChild(left); row.appendChild(right);
+  page.appendChild(row);
 
   paintLeft();
   paintRight();
-  return renderShell(node, "回答する");
+  return page;
 
   function paintLeft(){
     box.innerHTML = "";
-    if (!state.isAuthed){
-      box.appendChild(h("div",{class:"note", text:"SharePointに接続すると表示できます（右上）。"}));
-      return;
-    }
     if (!state.currentQData){
-      box.appendChild(h("div",{class:"note", text:"上でQを選択して「表示」してください。"}));
+      box.appendChild(el("div",{text:"左上でQを選択して「表示」してください。", style:"color:#bbb;font-weight:900;"}));
       return;
     }
-
     const d = state.currentQData;
     const side = (active==="q") ? d.question : d.answer;
+    const photos = side.photos || [];
 
-    tabQ.classList.toggle("on", active==="q");
-    tabA.classList.toggle("on", active==="a");
-
-    const imgbox = h("div",{class:"imgbox"},[
-      h("div",{class:"note", text:"写真が登録されていません"})
+    const imgwin = el("div",{style:"height:260px;border-radius:14px;border:1px solid #333;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;margin-bottom:10px;"},[
+      el("div",{text:"写真が登録されていません", style:"color:#888;font-weight:900;"})
     ]);
-
-    if (side.photos && side.photos.length){
-      imgbox.innerHTML = "";
-      const img = h("img",{});
-      imgbox.appendChild(img);
-      getDownloadUrl(side.photos[0]).then(url=>{ if (url) img.src = url; });
+    if (photos.length) {
+      imgwin.innerHTML = "";
+      const img = el("img",{style:"max-width:100%;max-height:100%;object-fit:contain;"});
+      imgwin.appendChild(img);
+      getDownloadUrl(photos[0]).then(url=>{ if(url) img.src=url; });
     }
+    box.appendChild(imgwin);
 
-    box.appendChild(imgbox);
-    box.appendChild(h("div",{class:"note", text:(active==="q" ? "質問内容（ここだけ縦スクロール可）" : "回答内容（ここだけ縦スクロール可）")}));
-    const pre = h("div",{class:"pre"});
+    box.appendChild(el("div",{text: (active==="q") ? "質問内容（ここだけ縦スクロール可）" : "回答内容（ここだけ縦スクロール可）", style:"color:#b8b8b8;font-weight:900;margin-bottom:6px;"}));
+    const pre = el("div",{style:"white-space:pre-wrap;color:#eee;font-weight:700;user-select:text;"});
     pre.textContent = side.text || "";
     box.appendChild(pre);
+
+    tQ.set(active==="q"); tA.set(active==="a");
   }
 
   function paintRight(){
-    if (state.modeAnswer==="new"){
-      btnNew.classList.add("primary");
-      btnEdit.classList.remove("primary");
+    if (state.modeAnswer==="new") {
+      btnNew.style.background="#0af"; btnNew.style.color="#000";
+      btnEdit.style.background="#1c1c1c"; btnEdit.style.color="#fff";
     } else {
-      btnEdit.classList.add("primary");
-      btnNew.classList.remove("primary");
+      btnEdit.style.background="#0af"; btnEdit.style.color="#000";
+      btnNew.style.background="#1c1c1c"; btnNew.style.color="#fff";
     }
-    if (state.currentQData){
+    if (state.currentQData) {
       responderSel.value = state.currentQData.answer.responder || "";
       ansText.value = state.currentQData.answer.text || "";
     }
   }
+
+  function selStyle(){ return "flex:1;height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function taStyle(){ return "flex:1;min-height:160px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;resize:none;"; }
+  function fileStyle(){ return "height:52px;border-radius:12px;border:2px solid #2a2a2a;background:#0c0c0c;color:#fafafa;padding:12px;font-weight:800;"; }
+  function btnStyle(bg,fg,h){ return `height:${h}px;border-radius:14px;border:2px solid #2a2a2a;background:${bg};color:${fg};font-weight:900;font-size:18px;cursor:pointer;white-space:nowrap;padding:0 18px;`; }
+  function tabBtn(name, sel, fn){
+    const b = el("button",{text:name, style:`padding:10px 14px;border-radius:999px;border:2px solid #2a2a2a;background:${sel?"#0af":"#151515"};color:${sel?"#000":"#fff"};font-weight:900;cursor:pointer;`});
+    b.addEventListener("click", fn);
+    return { btn:b, set:(on)=>{ b.style.background=on?"#0af":"#151515"; b.style.color=on?"#000":"#fff"; } };
+  }
 }
 
-/* ===== render ===== */
 function render(){
   $app.innerHTML = "";
   let node = null;
-
-  if (state.route==="home") node = pageHome();
-  else if (state.route==="answer") node = pageAnswer();
-  else if (state.route==="ask") node = pageAsk();
-  else if (state.route==="history") node = pageHistory();
-  else if (state.route==="export") node = pageExport();
-  else { state.route="home"; node = pageHome(); }
-
+  if (state.route==="home") node = renderHome();
+  else if (state.route==="answer") node = renderAnswer();
+  else if (state.route==="ask") node = renderAsk();
+  else if (state.route==="history") node = renderHistory();
+  else if (state.route==="export") node = renderExport();
+  else { state.route="home"; node = renderHome(); }
   $app.appendChild(node);
 }
 
-/* ===== boot ===== */
+/* ====== Boot ====== */
 (async function boot(){
-  try{
+  try {
     await ensureMsalReady();
-    const acc = getAccount();
-    state.isAuthed = !!acc;
 
-    // ログイン済みなら初回に一覧を作る
-    if (acc){
+    // ログイン済みなら一覧構築（未ログインでもホームは出す）
+    const acc = getAccount();
+    if (acc) {
       await getAccessToken();
       await rebuildIndex();
     }
 
     render();
-  } catch(e){
+  } catch (e) {
+    // ここで止まると黒画面になるので必ずfatal表示
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
