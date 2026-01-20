@@ -757,7 +757,7 @@ function render(){
     // ログイン済みなら初回に一覧を作る
     if (acc){
       await getAccessToken();
-      await rebuildIndex();
+      // await rebuildIndex();
     }
 
     render();
@@ -765,3 +765,4 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
