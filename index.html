@@ -2,41 +2,96 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>フロンティアQ&A</title>
 
-  <link rel="stylesheet" href="./app.css" />
+  <!-- MSAL (Microsoft login) -->
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/dist/msal-browser.min.js"></script>
 
-  <!-- MSAL (Microsoft Entra / AAD) -->
-  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.20.0/lib/msal-browser.min.js"></script>
+  <style>
+    /* ★元Flask BASE_HTMLのCSSをほぼそのまま移植★ */
+    :root { --bg:#0b0b0b; --fg:#fafafa; --muted:#b8b8b8; --accent:#3dd2ff; --chip:#1c1c1c;
+            --danger:#ff5d5d; --ok:#5dff86; --border:#2a2a2a; }
+    * { box-sizing:border-box; user-select:none; -webkit-tap-highlight-color:transparent; }
+    html,body { margin:0; padding:0; width:100vw; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui, sans-serif; overflow:hidden; }
+    a { color: var(--accent); text-decoration:none; }
+    .page { display:flex; flex-direction:column; width:100%; height:100dvh; }
+
+    .header { position: relative; flex:0 0 56px; display:grid; grid-template-columns:auto 1fr auto; align-items:center;
+              gap:12px; padding:8px 12px; border-bottom:1px solid var(--border); background:#0e0e0e; z-index:5; }
+    .header-left { display:flex; align-items:center; gap:8px; min-width:0; }
+    .backbtn { display:inline-flex; align-items:center; justify-content:center; padding:10px 14px; border-radius:12px; border:2px solid var(--border); background:#151515; font-weight:800; white-space:nowrap; }
+    .header-title { position: absolute; left: 50%; transform: translateX(-50%); text-align:center; font-size: clamp(18px, 4.5vw, 28px); font-weight:800; pointer-events: none; white-space: nowrap; }
+    .header-right { justify-self:end; display:flex; gap:8px; }
+
+    .hselect { height:38px; background:#0c0c0c; color:var(--fg); border:2px solid var(--border); border-radius:999px; padding:0 12px; font-weight:800; }
+    .viewing-as { color:#aaa; font-size:12px; white-space:nowrap; }
+    .notifbtn { position:relative; width:38px; height:38px; border-radius:50%; border:2px solid var(--border); background:#1b1b1b; color:#fff; font-weight:900; display:inline-flex; align-items:center; justify-content:center; }
+    .notifbtn .bell { font-size: 16px; line-height: 1; }
+
+    .content { flex:1 1 auto; display:flex; flex-direction:column; padding:8px 12px; gap:12px; min-height:0; }
+    .title { text-align:center; font-size: clamp(20px, 5vw, 40px); font-weight:800; letter-spacing:1px; }
+
+    .chips { display:grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap:12px; flex:1; min-height:0; }
+    .chip { display:flex; flex-direction:column; align-items:center; justify-content:center; background:#1c1c1c; border:2px solid var(--border); border-radius:18px;
+            font-size: clamp(16px, 4vw, 28px); font-weight:800; transition:.1s transform,.1s background; padding:16px; text-align:center; }
+    .chip:active { transform: scale(0.98); background:#222; }
+    .subtxt { margin-top:6px; color:#b8b8b8; font-weight:600; font-size:.8em; }
+
+    .row { display:flex; gap:12px; flex:1; min-height:0; }
+    .pane { background:#101010; border:2px solid var(--border); border-radius:18px; padding:12px; display:flex; flex-direction:column; gap:10px; min-height:0; }
+    .pane.equal { flex:1; min-width:0; }
+
+    .btn { appearance:none; border:none; border-radius:14px; background:#1f1f1f; color:#fff; padding:12px 16px; font-size: clamp(14px, 3.2vw, 20px); font-weight:700; border:2px solid var(--border); white-space:nowrap; }
+    .btn.accent { background:#0af; color:#000; }
+    .btn.ok { background:#0f2; color:#000; }
+    .btn.danger { background:#ff4040; color:#fff; }
+
+    .fields { display:flex; gap:10px; }
+    .select, .input, .textarea, .file { width:100%; font-size: clamp(14px, 3vw, 18px); padding:12px; background:#0c0c0c; color:var(--fg); border:2px solid var(--border); border-radius:12px; }
+    .select, .file { height:54px; }
+    .textarea { flex:1; resize:none; min-height:120px; }
+
+    .imgwin { position:relative; flex:1; min-height:220px; background:#000; border:1px solid #333; border-radius:14px; overflow:hidden; }
+    .stage { position:absolute; left:0; top:0; width:100%; height:100%; }
+    .tabs { display:flex; gap:8px; flex-wrap:wrap; }
+    .tab { padding:8px 12px; border-radius:999px; border:2px solid var(--border); background:#151515; font-weight:800; cursor:pointer; }
+    .tab.sel { background:#0af; color:#000; }
+
+    .hscroll { overflow-y:auto; border-radius:12px; border:1px solid var(--border); background:#0d0d0d; padding:8px; min-height:0; }
+    .bigbtn { width:100%; height:64px; font-size: clamp(16px, 4vw, 24px); }
+    .msg { text-align:center; color:#ffb; font-size:14px; }
+
+    /* 今回の要望：写真ウィンドウの「− 等倍 ＋」は丸ごと無し（CSSもJSも無し） */
+  </style>
 </head>
+
 <body>
-  <div class="app">
-    <!-- Header -->
+  <div class="page">
     <div class="header">
       <div class="header-left">
-        <button class="btn pill" id="btnBack" style="display:none;">← 前のページに戻る</button>
-        <div class="viewerbox">
-          <div class="viewer-pill" id="viewerPill">ゲスト</div>
-          <div class="viewer-sub">として閲覧中</div>
-        </div>
-        <button class="bell" id="btnBell" title="通知（ダミー）">
-          🔔 <span id="notifDot" class="notif-dot" style="display:none;"></span>
-        </button>
+        <button id="backBtn" class="backbtn" style="visibility:hidden">⇠ 前のページに戻る</button>
+
+        <select id="viewerSelect" class="hselect">
+          <option>平野</option><option>重川</option><option>山下</option><option>傳田</option>
+          <option>佐藤</option><option>川名</option><option>白根</option><option selected>ゲスト</option>
+        </select>
+        <span class="viewing-as">として閲覧中</span>
+
+        <button class="notifbtn" id="notifBtn" title="通知"><span class="bell">🔔</span></button>
       </div>
 
       <div class="header-title" id="headerTitle">ホーム</div>
 
       <div class="header-right">
-        <button class="btn pill accent" id="btnLogin">Microsoftでログイン</button>
-        <button class="btn pill" id="btnLogout" style="display:none;">ログアウト</button>
+        <button class="btn accent" id="msLoginBtn">Microsoftでログイン</button>
       </div>
     </div>
 
-    <!-- Content -->
-    <div class="content" id="appRoot"></div>
+    <div class="content" id="app"></div>
   </div>
 
   <script src="./app.js"></script>
 </body>
 </html>
+
