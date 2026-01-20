@@ -5,12 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#07070a" />
   <title>フロンティアQ&A</title>
-  <!-- MSAL（先にdeferで読み込む：順序保証される） -->
+
+  <!-- MSAL（先にdeferで読み込む：順序保証） -->
   <script defer src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.23.0/lib/msal-browser.min.js"></script>
 
-  <!-- あなたのアプリ（MSALの後に読む） -->
-  <script defer src="./app.js"></script>
-  
   <style>
     :root{
       color-scheme: dark;
@@ -265,15 +263,12 @@
       .panel{ min-height:unset; }
     }
   </style>
+
+  <!-- app.js（MSALの後にdeferで読み込む） -->
+  <script defer src="./app.js"></script>
 </head>
 
 <body>
   <div id="app"></div>
 </body>
 </html>
-
-
-
-
-
-
