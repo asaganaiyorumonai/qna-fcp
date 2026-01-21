@@ -32,6 +32,7 @@ const state = {
   modeAnswer: "new",
   modalOpen: false,
   isAuthed: false,
+  docRootPath: null, // ★SharePoint上の実体ルート（自動解決）
 };
 
 const $app = document.getElementById("app");
@@ -90,7 +91,18 @@ async function ensureMsalReady() {
   ensureMsalLoaded();
   msalApp = new msal.PublicClientApplication(msalConfig);
   await msalApp.initialize();
-  try { await msalApp.handleRedirectPromise(); } catch {}
+
+  let redirectResult = null;
+  try { redirectResult = await msalApp.handleRedirectPromise(); } catch {}
+
+  // ★リダイレクト直後ならここで接続扱い＆index構築までやる
+  if (redirectResult && redirectResult.account) {
+    state.isAuthed = true;
+    try {
+      await getAccessToken();
+      await rebuildIndex();
+    } catch {}
+  }
 }
 
 function getAccount() {
@@ -163,11 +175,14 @@ async function ensureSiteAndDrive() {
   const driveRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${state.siteId}/drive`);
   const drive = await driveRes.json();
   state.driveId = drive.id;
+  await resolveDocRoot();
 }
 
 /* ====== SharePoint IO ====== */
-function qFolder(q) { return `${DOC_ROOT_PATH}/Q/Q${q}`; }
-function aFolder(q) { return `${DOC_ROOT_PATH}/A/A${q}`; }
+function rootPath() { return state.docRootPath || DOC_ROOT_PATH; }
+
+function qFolder(q) { return `${rootPath()}/Q/Q${q}`; }
+function aFolder(q) { return `${rootPath()}/A/A${q}`; }
 function qJsonPath(q){ return `${qFolder(q)}/Q${q}.json`; }
 function qTxtPath(q){ return `${qFolder(q)}/Q${q}.txt`; }
 function aJsonPath(q){ return `${aFolder(q)}/A${q}.json`; }
@@ -223,6 +238,58 @@ async function getDownloadUrl(path) {
   const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}`);
   const j = await res.json();
   return j["@microsoft.graph.downloadUrl"] || null;
+}
+
+async function getItemMeta(path) {
+  await ensureSiteAndDrive();
+  const p = encPath(path);
+  const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}`);
+  return await res.json();
+}
+
+// ★SharePointの「実体ルート」を自動で特定する
+async function resolveDocRoot() {
+  if (state.docRootPath) return state.docRootPath;
+
+  const candidates = [
+    DOC_ROOT_PATH,
+    `Shared Documents/${DOC_ROOT_PATH}`,
+    `Documents/${DOC_ROOT_PATH}`,
+    `共有ドキュメント/${DOC_ROOT_PATH}`, // 日本語サイト用の保険
+  ];
+
+  // 1) まずは候補を順に当てる
+  for (const c of candidates) {
+    try {
+      const meta = await getItemMeta(c);
+      if (meta && meta.folder) {
+        state.docRootPath = c;
+        return state.docRootPath;
+      }
+    } catch (e) {
+      // 404等は無視して次へ
+    }
+  }
+
+  // 2) それでも見つからない場合は search で探す（最終手段）
+  try {
+    const q = encodeURIComponent(DOC_ROOT_PATH);
+    const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root/search(q='${q}')?$top=50`);
+    const j = await res.json();
+    const hit = (j.value || []).find(x => x.folder && x.name === DOC_ROOT_PATH);
+
+    if (hit && hit.parentReference && hit.parentReference.path) {
+      // parentReference.path は "/drives/{id}/root:/Shared Documents/xxx" みたいな形
+      const m = String(hit.parentReference.path).match(/root:(.*)$/);
+      const parentPath = m ? m[1].replace(/^\/+/, "") : "";
+      state.docRootPath = parentPath ? `${parentPath}/${hit.name}` : hit.name;
+      return state.docRootPath;
+    }
+  } catch (e) {
+    // 無視して最後にエラー
+  }
+
+  throw new Error(`SharePoint上で「${DOC_ROOT_PATH}」フォルダが見つかりませんでした（場所が想定外です）`);
 }
 
 /* ===== utils ===== */
@@ -811,4 +878,5 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
