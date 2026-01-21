@@ -262,6 +262,30 @@
       .panel2{ grid-template-columns: 1fr; }
       .panel{ min-height:unset; }
     }
+
+    /* ===== topbar responsive fix ===== */
+    .topbar{
+      padding: 0 12px;
+    }
+    .topbar .right{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;         /* ←これで右上が折り返せる */
+      justify-content:flex-end;
+      max-width: 70vw;        /* ←右上が暴れて画面外に行くのを防ぐ */
+    }
+    .topbar .left{
+      max-width: 30vw;
+    }
+
+    /* iPad/スマホで右上の説明文が幅を食うので縮める */
+    @media (max-width: 980px){
+      .topbar .right .note{ display:none; }   /* 「ゲストとして閲覧中」を消してボタン優先 */
+      .topbar{ height:auto; min-height:var(--topH); padding:8px 12px; }
+      .topbar .left, .topbar .right{ position:static; }
+      .topbar{ justify-content:space-between; }
+    }
   </style>
 
   <!-- app.js（MSALの後にdeferで読み込む） -->
@@ -272,3 +296,4 @@
   <div id="app"></div>
 </body>
 </html>
+
