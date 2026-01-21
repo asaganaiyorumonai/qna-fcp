@@ -167,23 +167,17 @@ async function graphFetch(url, { method="GET", headers={}, body=null } = {}) {
 function encPath(p){ return p.split("/").map(encodeURIComponent).join("/"); }
 
 async function ensureSiteAndDrive() {
-  // ★すでに site/drive が取れてても docRoot は未解決かもしれないので必ず担保
-  if (state.siteId && state.driveId) {
-    if (!state.docRootPath) {
-      await resolveDocRoot();
-    }
-    return;
-  }
+  if (state.siteId && state.driveId) return;
 
   const siteRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${SHAREPOINT_SITE_PATH}`);
   const site = await siteRes.json();
+  console.log("site", site);
   state.siteId = site.id;
 
   const driveRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${state.siteId}/drive`);
   const drive = await driveRes.json();
+  console.log("drive", drive);
   state.driveId = drive.id;
-
-  await resolveDocRoot();
 }
 
 /* ====== SharePoint IO ====== */
@@ -887,6 +881,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
