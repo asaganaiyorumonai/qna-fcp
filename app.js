@@ -19,6 +19,11 @@ const RESPONDER_OPTS = ["高橋さん　SC","中村さん　SC","平野さん　
 
 const NEED_REBUILD_KEY = "qa_need_rebuild";
 
+const DRIVE_ID = "b!n9E0zIMV1k-6pkzClgBqeV9odCqzUZEoL4X80gNzCqLsKJMS1E1SbR6zVXJD4PG";
+await fetch(`https://graph.microsoft.com/v1.0/drives/${DRIVE_ID}/root/children`, {
+  headers: { Authorization: `Bearer ${accessToken}` }
+}).then(r=>r.json()).then(console.log);
+
 const state = {
   viewer: localStorage.getItem("qa_viewer") || "ゲスト",
   route: "home",
@@ -881,6 +886,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
