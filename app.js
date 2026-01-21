@@ -106,6 +106,30 @@ async function loginRedirect() {
   throw new Error("redirecting");
 }
 
+async function logoutRedirect() {
+  if (!msalApp) return;
+  const acc = getAccount();
+  // キャッシュを消して確実に「未接続」に戻す
+  state.isAuthed = false;
+  state.siteId = null;
+  state.driveId = null;
+  state.qIndex = [];
+  state.unansweredCount = 0;
+  state.notifItems = [];
+  state.currentQ = null;
+  state.currentQData = null;
+
+  try {
+    await msalApp.logoutRedirect({
+      account: acc || undefined,
+      postLogoutRedirectUri: REDIRECT_URI,
+    });
+  } catch (e) {
+    // まれにSafariでlogoutRedirectが落ちるので、最後は強制的にリロード
+    location.href = REDIRECT_URI;
+  }
+}
+
 async function getAccessToken() {
   const acc = getAccount();
   if (!acc) return loginRedirect();
@@ -409,10 +433,23 @@ function renderShell(contentNode, pageTitle=null) {
       viewerSelect(),
       // ベル
       h("button",{class:"btn", text:"🔔", onclick:()=>{ state.modalOpen = !state.modalOpen; render(); }}),
-      // 接続ボタン（未ログイン）
-      (!state.isAuthed ? h("button",{class:"btn primary", text:"SharePointに接続", onclick: async ()=>{
-        await loginRedirect();
-      }}) : null),
+      // SharePoint 接続ボタン（常に表示）
+      //  - 未接続：接続ボタン
+      //  - 接続中：接続中表示 + 切断ボタン
+      h("div",{class:"row"},[
+        (!state.isAuthed
+          ? h("button",{class:"btn primary", text:"SharePointに接続", onclick: async ()=>{
+              await loginRedirect();
+            }})
+          : h("div",{class:"pill", text:"SharePoint：接続中"})
+        ),
+        (state.isAuthed
+          ? h("button",{class:"btn danger", text:"切断", onclick: async ()=>{
+              await logoutRedirect();
+            }})
+          : null
+        ),
+      ]),
     ])
   ]);
 
@@ -774,3 +811,4 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
