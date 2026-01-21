@@ -881,11 +881,13 @@ function render(){
         await rebuildIndex();
       }
     }
+    console.log("docRootPath =", state.docRootPath);
     render();
   } catch(e){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
