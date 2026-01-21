@@ -167,7 +167,14 @@ async function graphFetch(url, { method="GET", headers={}, body=null } = {}) {
 function encPath(p){ return p.split("/").map(encodeURIComponent).join("/"); }
 
 async function ensureSiteAndDrive() {
-  if (state.siteId && state.driveId) return;
+  // ★すでに site/drive が取れてても docRoot は未解決かもしれないので必ず担保
+  if (state.siteId && state.driveId) {
+    if (!state.docRootPath) {
+      await resolveDocRoot();
+    }
+    return;
+  }
+
   const siteRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${SHAREPOINT_SITE_PATH}`);
   const site = await siteRes.json();
   state.siteId = site.id;
@@ -175,6 +182,7 @@ async function ensureSiteAndDrive() {
   const driveRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${state.siteId}/drive`);
   const drive = await driveRes.json();
   state.driveId = drive.id;
+
   await resolveDocRoot();
 }
 
@@ -324,7 +332,7 @@ function askerMatchesViewer(asker, viewer) {
 
 /* ===== index build ===== */
 async function rebuildIndex() {
-  const qDirs = await listChildren(`${DOC_ROOT_PATH}/Q`);
+  const qDirs = await listChildren(`${rootPath()}/Q`);
   const qNums = qDirs
     .filter(x => x.folder && /^Q\d+$/.test(x.name))
     .map(x => Number(x.name.slice(1)))
@@ -878,5 +886,6 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
