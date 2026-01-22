@@ -75,12 +75,12 @@ function esc(s){ return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<'
 
 window.addEventListener("error", (e)=>{
   const msg = String(e.message || "");
-  if (/evm|bybit|ethereum/i.test(msg)) return; // 拡張機能系は無視
+  if (/evm||bybit||ethereum/i.test(msg)) return; // 拡張機能系は無視
   fatal("実行エラーが発生しました", `${msg}\n${e.filename||""}:${e.lineno||""}:${e.colno||""}`);
 });
 window.addEventListener("unhandledrejection", (e)=>{
   const msg = String(e.reason || "");
-  if (/evm|bybit|ethereum/i.test(msg)) return;
+  if (/evm||bybit||ethereum/i.test(msg)) return;
   fatal("Promiseエラーが発生しました", msg);
 });
 
@@ -1064,6 +1064,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
