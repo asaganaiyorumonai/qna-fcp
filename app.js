@@ -227,7 +227,7 @@ async function listChildren(path) {
 async function downloadText(path) {
   await ensureSiteAndDrive();
   const p = encPath(path);
-  const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}:/content`);
+  const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}/content`);
   return await res.text();
 }
 async function downloadJson(path) {
@@ -269,40 +269,39 @@ async function getDownloadUrl(path) {
   return j["@microsoft.graph.downloadUrl"] || null;
 }
 
+function encPath(path) {
+  return String(path || "")
+    .split("/")
+    .map(s => encodeURIComponent(s))
+    .join("/");
+}
+
 // 実体ルート（Shared Documents などの揺れ）を吸収
 async function resolveDocRoot() {
   if (state.docRootPath) return state.docRootPath;
 
-  const candidates = [
-    DOC_ROOT_PATH,
-    `Shared Documents/${DOC_ROOT_PATH}`,
-    `Documents/${DOC_ROOT_PATH}`,
-    `共有ドキュメント/${DOC_ROOT_PATH}`,
-  ];
+  // ① まずドライブ直下 children を見る（ここが最強・確実）
+  try {
+    const kids = await listChildren(""); // root children
+    const hit = (kids || []).find(x => x.folder && x.name === DOC_ROOT_PATH);
+    if (hit) {
+      state.docRootPath = DOC_ROOT_PATH; // 直下にあるのでそのまま
+      return state.docRootPath;
+    }
+  } catch {}
 
-  for (const c of candidates) {
+  // ② “Shared Documents” などの揺れがある場合の保険
+  const containers = ["Shared Documents", "Documents", "共有ドキュメント"];
+  for (const c of containers) {
     try {
-      const meta = await getItemMeta(c);
-      if (meta && meta.folder) {
-        state.docRootPath = c;
+      const kids = await listChildren(c);
+      const hit = (kids || []).find(x => x.folder && x.name === DOC_ROOT_PATH);
+      if (hit) {
+        state.docRootPath = `${c}/${DOC_ROOT_PATH}`;
         return state.docRootPath;
       }
     } catch {}
   }
-
-  // search 最終手段
-  try {
-    const q = encodeURIComponent(DOC_ROOT_PATH);
-    const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root/search(q='${q}')?$top=50`);
-    const j = await res.json();
-    const hit = (j.value || []).find(x => x.folder && x.name === DOC_ROOT_PATH);
-    if (hit?.parentReference?.path) {
-      const m = String(hit.parentReference.path).match(/root:(.*)$/);
-      const parentPath = m ? m[1].replace(/^\/+/, "") : "";
-      state.docRootPath = parentPath ? `${parentPath}/${hit.name}` : hit.name;
-      return state.docRootPath;
-    }
-  } catch {}
 
   throw new Error(`SharePoint上で「${DOC_ROOT_PATH}」フォルダが見つかりませんでした。`);
 }
@@ -1068,3 +1067,4 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
