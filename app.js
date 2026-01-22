@@ -1052,7 +1052,6 @@ function render(){
 /* ===== boot ===== */
 (async function boot(){
   try{
-    await debugListRoot();
     await ensureMsalReady();
     const acc = getAccount();
     state.isAuthed = !!acc;
@@ -1060,6 +1059,7 @@ function render(){
     if (acc){
       await getAccessToken();
       // 既にログイン済みで開いた場合：表示用にストレージ準備だけはする
+      await debugListRoot();
       await prepareStorage();
 
       // 「接続ボタン→ログイン復帰」フラグがある場合だけ index 再構築
@@ -1074,6 +1074,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
