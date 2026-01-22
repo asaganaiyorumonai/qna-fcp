@@ -421,7 +421,7 @@ function parsePlanAItemToUnified(obj){
   const aPhotos = normalizePhotoList(aObj.photos || obj.aPhotos || obj.answerPhotos || []);
 
   return {
-    q: Number(qNo || 0),
+    q: Number(qnum || 0),
     question: { date:qDate, asker, section, text:qText, photos:qPhotos },
     answer:   { date:aDate, responder, text:aText, photos:aPhotos },
   };
@@ -634,7 +634,7 @@ async function upsertAnswer(q, { responder, text, files, mode }) {
     const ext = (f.name.split(".").pop() || "png").toLowerCase();
     const n = startIdx + i + 1;
     const name = `A${q}-${n}.${ext}`;
-    const rel = `media/Q${q}/${name}`;
+    const rel = `media/Q${pad6(q)}/${name}`;
     await uploadBinary(`${rootPath()}/${rel}`, f, f.type || "application/octet-stream");
     newPhotos.push(rel);
   }
@@ -1062,6 +1062,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
