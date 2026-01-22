@@ -1,18 +1,26 @@
 /* =========================
-   フロンティアQ&A - GitHub Pages版（UI復旧版）
-   - 元アプリ寄せのレイアウト（4分割ホーム / 2ペイン画面）
-   - 「SharePointに接続」ボタン追加（未ログイン時）
-   - 通知（ベル）モーダル（閲覧者に紐づくQを一覧）
-   - 写真ウィンドウの「- / 等倍 / +」は廃止（要件通り）
+   フロンティアQ&A - GitHub Pages版（SharePoint/PLAN_A対応）
+   - MSALでログイン → GraphでSharePointのフォルダを読み書き
+   - 新構成（PLAN_A）/旧構成（legacy）を自動検出して動作
 ========================= */
 
 const TENANT_ID = "8fba5de9-6507-44de-b9b2-35abc69bb880";
 const CLIENT_ID = "329441a8-3466-4f0f-b3e1-dca0e3a0c277";
 const REDIRECT_URI = "https://asaganaiyorumonai.github.io/qna-fcp/";
+
+// SharePoint site（パス指定で site を引ける形式）
 const SHAREPOINT_SITE_PATH = "shigecreator.sharepoint.com:/sites/allcompany";
-const DOC_ROOT_PATH = "Q&A_Picture_and_text";
+
+// ★移行後のルートフォルダ名（ドキュメント直下に置いたやつ）
+const DOC_ROOT_PATH = "Q&A_Picture_and_text_PLAN_A";
+
+// ★DriveIDが確実に取れているなら固定推奨（site->drive自動取得がコケても動く）
+const FIXED_DRIVE_ID = "b!n9E0zIMvIk-6pkzClgBqevy0duCqzUZEoL4X80gNzCqLsKJMSlE1SbR6zVXJD4PG"; // 例: "b!xxxx..." ←ここに入れる（空なら自動取得）
+
+// 権限（Writeするなら ReadWrite が必要）
 const SCOPES = ["User.Read", "Sites.ReadWrite.All"];
 
+// UI選択肢
 const ASKER_OPTS = ["平野さん　FCP","重川さん　宇井建設","山下さん　宇井建設","傳田さん　宇井建設","佐藤さん　エンジン","小関さん　エンジン","川名さん　エンジン","白根さん　エンジン"];
 const SECTION_OPTS = ["二重床施工前","二重床","LGS","鉄板下地","木下地","石膏ボード","長尺シート","クロス","Pタイル","玄関タイル","フローリング","墨チェック（下地）","墨チェック（点検口）"];
 const RESPONDER_OPTS = ["高橋さん　SC","中村さん　SC","平野さん　FCP","重川さん　宇井建設","山下さん　宇井建設","傳田さん　エンジン","佐藤さん　エンジン","小関さん　エンジン","川名さん　エンジン","白根さん　エンジン"];
@@ -22,8 +30,10 @@ const NEED_REBUILD_KEY = "qa_need_rebuild";
 const state = {
   viewer: localStorage.getItem("qa_viewer") || "ゲスト",
   route: "home",
+
   siteId: null,
   driveId: null,
+
   qIndex: [],
   unansweredCount: 0,
   notifItems: [],
@@ -32,7 +42,9 @@ const state = {
   modeAnswer: "new",
   modalOpen: false,
   isAuthed: false,
-  docRootPath: null, // ★SharePoint上の実体ルート（自動解決）
+
+  docRootPath: null,   // 実体ルート（Shared Documents等の揺れ吸収後）
+  layout: null,        // "planA" | "legacy"
 };
 
 const $app = document.getElementById("app");
@@ -60,7 +72,7 @@ function esc(s){ return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<'
 
 window.addEventListener("error", (e)=>{
   const msg = String(e.message || "");
-  if (/evm|bybit|ethereum/i.test(msg)) return;
+  if (/evm|bybit|ethereum/i.test(msg)) return; // 拡張機能系は無視
   fatal("実行エラーが発生しました", `${msg}\n${e.filename||""}:${e.lineno||""}:${e.colno||""}`);
 });
 window.addEventListener("unhandledrejection", (e)=>{
@@ -74,7 +86,6 @@ function ensureMsalLoaded() {
   if (window.__MSAL_LOAD_ERROR__) throw new Error("MSALの読み込みに失敗しました\n" + window.__MSAL_LOAD_ERROR__);
   if (!window.msal || !window.msal.PublicClientApplication) throw new Error("MSALが読み込めていません（Shield/広告ブロックの可能性）");
 }
-
 const msalConfig = {
   auth: {
     clientId: CLIENT_ID,
@@ -95,12 +106,16 @@ async function ensureMsalReady() {
   let redirectResult = null;
   try { redirectResult = await msalApp.handleRedirectPromise(); } catch {}
 
-  // ★リダイレクト直後ならここで接続扱い＆index構築までやる
   if (redirectResult && redirectResult.account) {
     state.isAuthed = true;
     try {
       await getAccessToken();
-      await rebuildIndex();
+      // 接続直後は index 再構築する（ボタン→ログイン→戻り の流れ）
+      if (localStorage.getItem(NEED_REBUILD_KEY) === "1") {
+        localStorage.removeItem(NEED_REBUILD_KEY);
+        await prepareStorage();
+        await rebuildIndex();
+      }
     } catch {}
   }
 }
@@ -111,9 +126,7 @@ function getAccount() {
 }
 
 async function loginRedirect() {
-  // ログイン後に戻ってきたら index を作り直す目印
   localStorage.setItem(NEED_REBUILD_KEY, "1");
-
   await msalApp.loginRedirect({ scopes: SCOPES, prompt: "select_account" });
   throw new Error("redirecting");
 }
@@ -121,10 +134,13 @@ async function loginRedirect() {
 async function logoutRedirect() {
   if (!msalApp) return;
   const acc = getAccount();
-  // キャッシュを消して確実に「未接続」に戻す
+
   state.isAuthed = false;
   state.siteId = null;
   state.driveId = null;
+  state.docRootPath = null;
+  state.layout = null;
+
   state.qIndex = [];
   state.unansweredCount = 0;
   state.notifItems = [];
@@ -136,8 +152,7 @@ async function logoutRedirect() {
       account: acc || undefined,
       postLogoutRedirectUri: REDIRECT_URI,
     });
-  } catch (e) {
-    // まれにSafariでlogoutRedirectが落ちるので、最後は強制的にリロード
+  } catch {
     location.href = REDIRECT_URI;
   }
 }
@@ -166,37 +181,42 @@ async function graphFetch(url, { method="GET", headers={}, body=null } = {}) {
 }
 function encPath(p){ return p.split("/").map(encodeURIComponent).join("/"); }
 
+/* ====== Storage bootstrap ====== */
 async function ensureSiteAndDrive() {
-  // docRootPath まで決まってたら何もしない
-  if (state.siteId && state.driveId && state.docRootPath) return;
+  if (state.driveId) return;
 
-  // site
+  // 1) DriveID固定があるならそれを使う（最強）
+  if (FIXED_DRIVE_ID) {
+    state.driveId = FIXED_DRIVE_ID;
+    return;
+  }
+
+  // 2) site を引いて、documentLibrary を探す
   const siteRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${SHAREPOINT_SITE_PATH}`);
   const site = await siteRes.json();
   state.siteId = site.id;
 
-  // drive（← driveRes を作ってから json）
-  const driveRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${state.siteId}/drive`);
-  const drive = await driveRes.json();
-  state.driveId = drive.id;
+  const drivesRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${state.siteId}/drives?$select=id,name,driveType,webUrl`);
+  const drivesJson = await drivesRes.json();
+  const drives = drivesJson.value || [];
 
-  // 実体ルート解決（循環しない版で実行）
-  await resolveDocRoot();
+  // ありがちな名前を優先して選ぶ
+  const preferNames = ["ドキュメント", "Documents", "Shared Documents"];
+  let pick = drives.find(d => d.driveType === "documentLibrary" && preferNames.includes(d.name));
+  if (!pick) pick = drives.find(d => d.driveType === "documentLibrary");
+  if (!pick) throw new Error("このサイトで documentLibrary ドライブが見つかりませんでした。");
 
-  console.log("site", site);
-  console.log("drive", drive);
-  console.log("docRootPath", state.docRootPath);
+  state.driveId = pick.id;
 }
 
-/* ====== SharePoint IO ====== */
 function rootPath() { return state.docRootPath || DOC_ROOT_PATH; }
 
-function qFolder(q) { return `${rootPath()}/Q/Q${q}`; }
-function aFolder(q) { return `${rootPath()}/A/A${q}`; }
-function qJsonPath(q){ return `${qFolder(q)}/Q${q}.json`; }
-function qTxtPath(q){ return `${qFolder(q)}/Q${q}.txt`; }
-function aJsonPath(q){ return `${aFolder(q)}/A${q}.json`; }
-function aTxtPath(q){ return `${aFolder(q)}/A${q}.txt`; }
+async function getItemMeta(path) {
+  await ensureSiteAndDrive();
+  const p = encPath(path);
+  const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}`);
+  return await res.json();
+}
 
 async function listChildren(path) {
   await ensureSiteAndDrive();
@@ -205,6 +225,7 @@ async function listChildren(path) {
   const j = await res.json();
   return (j.value || []);
 }
+
 async function downloadText(path) {
   await ensureSiteAndDrive();
   const p = encPath(path);
@@ -250,14 +271,7 @@ async function getDownloadUrl(path) {
   return j["@microsoft.graph.downloadUrl"] || null;
 }
 
-async function getItemMeta(path, { skipEnsure = false } = {}) {
-  if (!skipEnsure) await ensureSiteAndDrive();   // ←必要なときだけ
-  const p = encPath(path);
-  const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}`);
-  return await res.json();
-}
-
-// ★SharePointの「実体ルート」を自動で特定する
+// 実体ルート（Shared Documents などの揺れ）を吸収
 async function resolveDocRoot() {
   if (state.docRootPath) return state.docRootPath;
 
@@ -265,42 +279,66 @@ async function resolveDocRoot() {
     DOC_ROOT_PATH,
     `Shared Documents/${DOC_ROOT_PATH}`,
     `Documents/${DOC_ROOT_PATH}`,
-    `共有ドキュメント/${DOC_ROOT_PATH}`, // 日本語サイト用の保険
+    `共有ドキュメント/${DOC_ROOT_PATH}`,
   ];
 
-  // 1) まずは候補を順に当てる
   for (const c of candidates) {
     try {
-      // ★ここ重要：skipEnsureで循環を断つ
-      const meta = await getItemMeta(c, { skipEnsure: true });
+      const meta = await getItemMeta(c);
       if (meta && meta.folder) {
         state.docRootPath = c;
         return state.docRootPath;
       }
-    } catch (e) {
-      // 404等は無視して次へ
-    }
+    } catch {}
   }
 
-  // 2) それでも見つからない場合は search で探す（最終手段）
+  // search 最終手段
   try {
     const q = encodeURIComponent(DOC_ROOT_PATH);
     const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root/search(q='${q}')?$top=50`);
     const j = await res.json();
     const hit = (j.value || []).find(x => x.folder && x.name === DOC_ROOT_PATH);
-
-    if (hit && hit.parentReference && hit.parentReference.path) {
-      // parentReference.path は "/drives/{id}/root:/Shared Documents/xxx" みたいな形
+    if (hit?.parentReference?.path) {
       const m = String(hit.parentReference.path).match(/root:(.*)$/);
       const parentPath = m ? m[1].replace(/^\/+/, "") : "";
       state.docRootPath = parentPath ? `${parentPath}/${hit.name}` : hit.name;
       return state.docRootPath;
     }
-  } catch (e) {
-    // 無視して最後にエラー
+  } catch {}
+
+  throw new Error(`SharePoint上で「${DOC_ROOT_PATH}」フォルダが見つかりませんでした。`);
+}
+
+// PLAN_A/legacy を自動判定
+async function detectLayout() {
+  if (state.layout) return state.layout;
+
+  const kids = await listChildren(rootPath());
+  const names = new Set(kids.map(x => x.name));
+
+  // 例：PLAN_A でありがちな構造
+  // - items/（jsonが並ぶ）
+  // - index.json / qa_index.json 等
+  if (names.has("items") || names.has("index.json") || names.has("qa_index.json")) {
+    state.layout = "planA";
+    return state.layout;
   }
 
-  throw new Error(`SharePoint上で「${DOC_ROOT_PATH}」フォルダが見つかりませんでした（場所が想定外です）`);
+  // legacy（Q と A フォルダがある）
+  if (names.has("Q") || names.has("A")) {
+    state.layout = "legacy";
+    return state.layout;
+  }
+
+  // どちらでもない → とりあえず planA 扱い（itemsが無くても json 走査で拾える可能性）
+  state.layout = "planA";
+  return state.layout;
+}
+
+async function prepareStorage(){
+  await ensureSiteAndDrive();
+  await resolveDocRoot();
+  await detectLayout();
 }
 
 /* ===== utils ===== */
@@ -333,35 +371,155 @@ function askerMatchesViewer(asker, viewer) {
   return normName(asker).includes(normName(viewer));
 }
 
-/* ===== index build ===== */
+/* =========================
+   DATA ACCESS (PLAN_A / legacy)
+========================= */
+
+// ---- legacy paths ----
+function qFolderLegacy(q) { return `${rootPath()}/Q/Q${q}`; }
+function aFolderLegacy(q) { return `${rootPath()}/A/A${q}`; }
+function qJsonLegacy(q){ return `${qFolderLegacy(q)}/Q${q}.json`; }
+function qTxtLegacy(q){ return `${qFolderLegacy(q)}/Q${q}.txt`; }
+function aJsonLegacy(q){ return `${aFolderLegacy(q)}/A${q}.json`; }
+function aTxtLegacy(q){ return `${aFolderLegacy(q)}/A${q}.txt`; }
+
+// ---- planA paths（この設計を基準に対応。実際の名前違いは自動走査で吸収）----
+function itemPathPlanA(q){ return `${rootPath()}/items/Q${q}.json`; } // 基本形
+function mediaFolderPlanA(q){ return `${rootPath()}/media/Q${q}`; }   // 基本形
+
+function normalizePhotoList(list){
+  const out = [];
+  for (const it of (list||[])) {
+    if (!it) continue;
+    if (typeof it === "string") out.push(it);
+    else if (typeof it === "object") {
+      if (it.path) out.push(it.path);
+      else if (it.name && it.folder) out.push(`${it.folder}/${it.name}`);
+      else if (it.name) out.push(it.name);
+    }
+  }
+  return out;
+}
+
+// PLAN_A の1件JSONを「共通フォーマット」に寄せる（キー揺れ吸収）
+function parsePlanAItemToUnified(obj){
+  // 想定される揺れを広く拾う
+  const qNo =
+    obj.qNo ?? obj.q ?? obj.questionNo ?? obj.question_no ??
+    Number(String(obj.id||"").replace(/[^\d]/g,"")) || null;
+
+  const qObj = obj.question || obj.q || obj.Q || {};
+  const aObj = obj.answer || obj.a || obj.A || {};
+
+  const qDate = qObj.date || qObj.last_updated || obj.qDate || obj.last_updated || "";
+  const asker = qObj.asker || qObj.author || obj.asker || obj.author || "";
+  const section = qObj.section || qObj.location || obj.section || obj.location || "";
+  const qText = qObj.text || obj.text || qObj.body || "";
+
+  const aDate = aObj.date || aObj.last_updated || obj.aDate || "";
+  const responder = aObj.responder || aObj.author || obj.responder || "";
+  const aText = aObj.text || aObj.body || "";
+
+  const qPhotos = normalizePhotoList(qObj.photos || obj.qPhotos || obj.questionPhotos || []);
+  const aPhotos = normalizePhotoList(aObj.photos || obj.aPhotos || obj.answerPhotos || []);
+
+  return {
+    q: Number(qNo || 0),
+    question: { date:qDate, asker, section, text:qText, photos:qPhotos },
+    answer:   { date:aDate, responder, text:aText, photos:aPhotos },
+  };
+}
+
 async function rebuildIndex() {
-  const qDirs = await listChildren(`${rootPath()}/Q`);
-  const qNums = qDirs
-    .filter(x => x.folder && /^Q\d+$/.test(x.name))
-    .map(x => Number(x.name.slice(1)))
-    .filter(n => Number.isFinite(n))
-    .sort((a,b)=>a-b);
+  await prepareStorage();
+  const layout = state.layout;
 
-  const idx = [];
-  let unanswered = 0;
+  if (layout === "legacy") {
+    // 旧構成：Qフォルダを走査
+    const qDirs = await listChildren(`${rootPath()}/Q`);
+    const qNums = qDirs
+      .filter(x => x.folder && /^Q\d+$/.test(x.name))
+      .map(x => Number(x.name.slice(1)))
+      .filter(n => Number.isFinite(n))
+      .sort((a,b)=>a-b);
 
-  for (const q of qNums) {
-    let qj = {}, qt = "";
-    try { qj = await downloadJson(qJsonPath(q)); } catch {}
-    try { qt = await downloadText(qTxtPath(q)); } catch {}
+    const idx = [];
+    let unanswered = 0;
 
-    let aj = null;
-    try { aj = await downloadJson(aJsonPath(q)); } catch { aj = null; }
+    for (const q of qNums) {
+      let qj = {}, qt = "";
+      try { qj = await downloadJson(qJsonLegacy(q)); } catch {}
+      try { qt = await downloadText(qTxtLegacy(q)); } catch {}
 
-    const qDate = qj.last_updated || "";
-    const asker = qj.author || "";
-    const section = qj.location || "";
-    const aDate = aj && aj.last_updated ? aj.last_updated : "";
+      let aj = null;
+      try { aj = await downloadJson(aJsonLegacy(q)); } catch { aj = null; }
 
-    if (!aDate) unanswered++;
-    idx.push({ q, qDate, asker, section, aDate, text: qt || "" });
+      const qDate = qj.last_updated || "";
+      const asker = qj.author || "";
+      const section = qj.location || "";
+      const aDate = aj && aj.last_updated ? aj.last_updated : "";
+
+      if (!aDate) unanswered++;
+      idx.push({ q, qDate, asker, section, aDate, text: qt || "" });
+    }
+
+    state.qIndex = idx;
+    state.unansweredCount = unanswered;
+    state.notifItems = buildNotificationsForViewer(state.viewer);
+    return;
   }
 
+  // planA：まず index.json があればそれを使う（高速）
+  let idx = [];
+  let unanswered = 0;
+
+  const rootKids = await listChildren(rootPath());
+  const hasIndex = rootKids.some(x => x.file && (x.name === "index.json" || x.name === "qa_index.json"));
+
+  if (hasIndex) {
+    const name = rootKids.find(x => x.file && (x.name === "index.json" || x.name === "qa_index.json")).name;
+    const data = await downloadJson(`${rootPath()}/${name}`);
+
+    const rows = Array.isArray(data) ? data : (data.items || data.value || []);
+    for (const r of rows) {
+      const q = Number(r.q || r.qNo || r.questionNo || String(r.id||"").replace(/[^\d]/g,"") || 0);
+      if (!q) continue;
+      const qDate = r.qDate || r.questionDate || r.last_updated || "";
+      const asker = r.asker || r.author || "";
+      const section = r.section || r.location || "";
+      const aDate = r.aDate || r.answerDate || "";
+      const text = r.text || r.qText || r.questionText || "";
+      if (!aDate) unanswered++;
+      idx.push({ q, qDate, asker, section, aDate, text });
+    }
+    idx.sort((a,b)=>a.q-b.q);
+    state.qIndex = idx;
+    state.unansweredCount = unanswered;
+    state.notifItems = buildNotificationsForViewer(state.viewer);
+    return;
+  }
+
+  // index.json がない場合：items/ を走査して作る（確実性重視）
+  const itemsFolder = rootKids.some(x=>x.folder && x.name==="items") ? `${rootPath()}/items` : rootPath();
+  const kids = await listChildren(itemsFolder);
+
+  const jsonFiles = kids.filter(x => x.file && /\.json$/i.test(x.name));
+  for (const f of jsonFiles) {
+    try {
+      const obj = await downloadJson(`${itemsFolder}/${f.name}`);
+      const uni = parsePlanAItemToUnified(obj);
+      if (!uni.q) continue;
+      const qDate = uni.question.date || "";
+      const asker = uni.question.asker || "";
+      const section = uni.question.section || "";
+      const aDate = uni.answer.date || "";
+      const text = uni.question.text || "";
+      if (!aDate) unanswered++;
+      idx.push({ q:uni.q, qDate, asker, section, aDate, text });
+    } catch {}
+  }
+
+  idx.sort((a,b)=>a.q-b.q);
   state.qIndex = idx;
   state.unansweredCount = unanswered;
   state.notifItems = buildNotificationsForViewer(state.viewer);
@@ -386,99 +544,196 @@ function buildNotificationsForViewer(viewer) {
   return items;
 }
 
-/* ===== Q details ===== */
 async function loadQFull(q) {
-  let qj = {}, qt = "";
-  try { qj = await downloadJson(qJsonPath(q)); } catch {}
-  try { qt = await downloadText(qTxtPath(q)); } catch {}
+  await prepareStorage();
 
-  let qFiles = [];
-  try { qFiles = await listChildren(qFolder(q)); } catch {}
-  const qPhotos = qFiles
-    .filter(x => x.file && new RegExp(`^Q${q}-\\d+\\.(png|jpg|jpeg|webp|bmp|tif|tiff|heic|heif|gif)$`, "i").test(x.name))
-    .map(x => `${qFolder(q)}/${x.name}`)
-    .sort((a,b)=> (Number((a.match(/-(\d+)\./)||[])[1]||0) - Number((b.match(/-(\d+)\./)||[])[1]||0)));
+  if (state.layout === "legacy") {
+    let qj = {}, qt = "";
+    try { qj = await downloadJson(qJsonLegacy(q)); } catch {}
+    try { qt = await downloadText(qTxtLegacy(q)); } catch {}
 
-  let aj = null, at = "";
-  try { aj = await downloadJson(aJsonPath(q)); } catch { aj = null; }
-  try { at = await downloadText(aTxtPath(q)); } catch { at = ""; }
+    let qFiles = [];
+    try { qFiles = await listChildren(qFolderLegacy(q)); } catch {}
+    const qPhotos = qFiles
+      .filter(x => x.file && new RegExp(`^Q${q}-\\d+\\.(png|jpg|jpeg|webp|bmp|tif|tiff|heic|heif|gif)$`, "i").test(x.name))
+      .map(x => `${qFolderLegacy(q)}/${x.name}`)
+      .sort((a,b)=> (Number((a.match(/-(\d+)\./)||[])[1]||0) - Number((b.match(/-(\d+)\./)||[])[1]||0)));
 
-  let aFiles = [];
-  try { aFiles = await listChildren(aFolder(q)); } catch {}
-  const aPhotos = aFiles
-    .filter(x => x.file && new RegExp(`^A${q}-\\d+\\.(png|jpg|jpeg|webp|bmp|tif|tiff|heic|heif|gif)$`, "i").test(x.name))
-    .map(x => `${aFolder(q)}/${x.name}`)
-    .sort((a,b)=> (Number((a.match(/-(\d+)\./)||[])[1]||0) - Number((b.match(/-(\d+)\./)||[])[1]||0)));
+    let aj = null, at = "";
+    try { aj = await downloadJson(aJsonLegacy(q)); } catch { aj = null; }
+    try { at = await downloadText(aTxtLegacy(q)); } catch { at = ""; }
+
+    let aFiles = [];
+    try { aFiles = await listChildren(aFolderLegacy(q)); } catch {}
+    const aPhotos = aFiles
+      .filter(x => x.file && new RegExp(`^A${q}-\\d+\\.(png|jpg|jpeg|webp|bmp|tif|tiff|heic|heif|gif)$`, "i").test(x.name))
+      .map(x => `${aFolderLegacy(q)}/${x.name}`)
+      .sort((a,b)=> (Number((a.match(/-(\d+)\./)||[])[1]||0) - Number((b.match(/-(\d+)\./)||[])[1]||0)));
+
+    state.currentQData = {
+      question: { date: qj.last_updated||"", asker: qj.author||"", section: qj.location||"", text: qt||"", photos: qPhotos },
+      answer:   { date: aj?.last_updated||"", responder: aj?.author||"", text: at||"", photos: aPhotos }
+    };
+    return;
+  }
+
+  // planA
+  let obj = null;
+
+  // 1) 基本パス（items/Q{q}.json）
+  try { obj = await downloadJson(itemPathPlanA(q)); } catch { obj = null; }
+
+  // 2) だめなら items/ を走査して Q{q} を探す
+  if (!obj) {
+    try {
+      const kids = await listChildren(`${rootPath()}/items`);
+      const hit = kids.find(x => x.file && new RegExp(`^Q${q}\\.json$`, "i").test(x.name));
+      if (hit) obj = await downloadJson(`${rootPath()}/items/${hit.name}`);
+    } catch {}
+  }
+
+  if (!obj) throw new Error(`Q${q} のデータJSONが見つかりませんでした（PLAN_A）`);
+
+  const uni = parsePlanAItemToUnified(obj);
+
+  // photos が「相対パス」だけのケースを吸収（media/Q{q}/... を補完）
+  const qPhotos = (uni.question.photos||[]).map(p => p.includes("/") ? `${rootPath()}/${p}` : `${mediaFolderPlanA(q)}/${p}`);
+  const aPhotos = (uni.answer.photos||[]).map(p => p.includes("/") ? `${rootPath()}/${p}` : `${mediaFolderPlanA(q)}/${p}`);
 
   state.currentQData = {
-    question: { date: qj.last_updated||"", asker: qj.author||"", section: qj.location||"", text: qt||"", photos: qPhotos },
-    answer:   { date: aj?.last_updated||"", responder: aj?.author||"", text: at||"", photos: aPhotos }
+    question: { date: uni.question.date||"", asker: uni.question.asker||"", section: uni.question.section||"", text: uni.question.text||"", photos: qPhotos },
+    answer:   { date: uni.answer.date||"", responder: uni.answer.responder||"", text: uni.answer.text||"", photos: aPhotos }
   };
 }
 
-/* ===== create/update ===== */
+/* ===== create/update（PLAN_Aなら items/Q{n}.json を更新する） ===== */
 async function createQuestion({ asker, section, text, files }) {
+  await prepareStorage();
+
   const maxQ = state.qIndex.reduce((m,r)=>Math.max(m, r.q), 0);
   const q = maxQ + 1;
 
-  const qMeta = {
-    question_no: `Q${q}`,
-    range: { start_row: 0, end_row: 0 },
-    last_updated: nowJstString(),
-    author: asker || "",
-    location: section || ""
-  };
+  if (state.layout === "legacy") {
+    // 旧構成は従来通り（必要なら残す）
+    const qMeta = { question_no:`Q${q}`, range:{start_row:0,end_row:0}, last_updated:nowJstString(), author:asker||"", location:section||"" };
+    await uploadJson(qJsonLegacy(q), qMeta);
+    await uploadText(qTxtLegacy(q), text || "");
+    const upFiles = Array.from(files || []);
+    for (let i=0; i<upFiles.length; i++) {
+      const f = upFiles[i];
+      const ext = (f.name.split(".").pop() || "png").toLowerCase();
+      const path = `${qFolderLegacy(q)}/Q${q}-${i+1}.${ext}`;
+      await uploadBinary(path, f, f.type || "application/octet-stream");
+    }
+    await rebuildIndex();
+    return q;
+  }
 
-  await uploadJson(qJsonPath(q), qMeta);
-  await uploadText(qTxtPath(q), text || "");
+  // PLAN_A：items/Q{q}.json + media/Q{q}/...
+  const item = {
+    qNo: q,
+    question: {
+      date: nowJstString(),
+      asker: asker || "",
+      section: section || "",
+      text: text || "",
+      photos: []
+    },
+    answer: {
+      date: "",
+      responder: "",
+      text: "",
+      photos: []
+    }
+  };
 
   const upFiles = Array.from(files || []);
   for (let i=0; i<upFiles.length; i++) {
     const f = upFiles[i];
     const ext = (f.name.split(".").pop() || "png").toLowerCase();
-    const path = `${qFolder(q)}/Q${q}-${i+1}.${ext}`;
-    await uploadBinary(path, f, f.type || "application/octet-stream");
+    const name = `Q${q}-${i+1}.${ext}`;
+    const rel = `media/Q${q}/${name}`;
+    await uploadBinary(`${rootPath()}/${rel}`, f, f.type || "application/octet-stream");
+    item.question.photos.push(rel); // 相対で保持
   }
 
+  await uploadJson(itemPathPlanA(q), item);
   await rebuildIndex();
   return q;
 }
 
 async function upsertAnswer(q, { responder, text, files, mode }) {
-  const aMeta = {
-    answer_no: `A${q}`,
-    range: { start_row: 0, end_row: 0 },
-    last_updated: nowJstString(),
-    author: responder || ""
-  };
+  await prepareStorage();
 
-  await uploadJson(aJsonPath(q), aMeta);
-  await uploadText(aTxtPath(q), text || "");
+  if (state.layout === "legacy") {
+    const aMeta = { answer_no:`A${q}`, range:{start_row:0,end_row:0}, last_updated:nowJstString(), author:responder||"" };
+    await uploadJson(aJsonLegacy(q), aMeta);
+    await uploadText(aTxtLegacy(q), text || "");
 
-  let startIdx = 0;
-  if (mode === "edit") {
-    let aFiles = [];
-    try { aFiles = await listChildren(aFolder(q)); } catch { aFiles = []; }
-    const nums = aFiles
-      .map(x => x.name || "")
-      .map(n => (n.match(new RegExp(`^A${q}-(\\d+)\\.`,"i"))||[])[1])
-      .filter(Boolean).map(Number).filter(Number.isFinite);
-    startIdx = nums.length ? Math.max(...nums) : 0;
+    let startIdx = 0;
+    if (mode === "edit") {
+      let aFiles = [];
+      try { aFiles = await listChildren(aFolderLegacy(q)); } catch { aFiles = []; }
+      const nums = aFiles
+        .map(x => x.name || "")
+        .map(n => (n.match(new RegExp(`^A${q}-(\\d+)\\.`,"i"))||[])[1])
+        .filter(Boolean).map(Number).filter(Number.isFinite);
+      startIdx = nums.length ? Math.max(...nums) : 0;
+    }
+    const upFiles = Array.from(files || []);
+    for (let i=0; i<upFiles.length; i++) {
+      const f = upFiles[i];
+      const ext = (f.name.split(".").pop() || "png").toLowerCase();
+      const n = startIdx + i + 1;
+      const path = `${aFolderLegacy(q)}/A${q}-${n}.${ext}`;
+      await uploadBinary(path, f, f.type || "application/octet-stream");
+    }
+
+    await rebuildIndex();
+    return;
   }
 
+  // PLAN_A：items/Q{q}.json を読み→更新
+  const obj = await downloadJson(itemPathPlanA(q));
+  const uni = parsePlanAItemToUnified(obj);
+
+  // 写真の開始番号（edit時は既存枚数の続き）
+  let startIdx = 0;
+  if (mode === "edit") startIdx = (uni.answer.photos || []).length;
+
   const upFiles = Array.from(files || []);
+  const newPhotos = [];
+
   for (let i=0; i<upFiles.length; i++) {
     const f = upFiles[i];
     const ext = (f.name.split(".").pop() || "png").toLowerCase();
     const n = startIdx + i + 1;
-    const path = `${aFolder(q)}/A${q}-${n}.${ext}`;
-    await uploadBinary(path, f, f.type || "application/octet-stream");
+    const name = `A${q}-${n}.${ext}`;
+    const rel = `media/Q${q}/${name}`;
+    await uploadBinary(`${rootPath()}/${rel}`, f, f.type || "application/octet-stream");
+    newPhotos.push(rel);
   }
 
+  // obj の形を保ちながら更新（可能なら question/answer キーに寄せる）
+  obj.qNo = uni.q || obj.qNo || q;
+  obj.question = obj.question || obj.q || obj.question || {};
+  obj.answer = obj.answer || obj.a || obj.answer || {};
+
+  obj.answer.date = nowJstString();
+  obj.answer.responder = responder || "";
+  obj.answer.text = text || "";
+
+  const old = normalizePhotoList(obj.answer.photos || []);
+  obj.answer.photos = old.concat(newPhotos);
+
+  await uploadJson(itemPathPlanA(q), obj);
   await rebuildIndex();
 }
 
-/* ===== DOM helpers ===== */
+/* =========================
+   UI（ここから下は基本あなたのUIと同じ）
+========================= */
+
 function h(tag, attrs={}, children=[]) {
   const e = document.createElement(tag);
   for (const [k,v] of Object.entries(attrs||{})) {
@@ -504,27 +759,18 @@ function renderShell(contentNode, pageTitle=null) {
     ]),
     h("div",{class:"title", text: (state.route==="home" ? "ホーム" : pageTitle || "")}),
     h("div",{class:"right"},[
-      // 閲覧者
       h("div",{},[
         h("span",{class:"note", text: (state.viewer==="ゲスト" ? "ゲストとして閲覧中" : `${state.viewer} として閲覧中`)})
       ]),
       viewerSelect(),
-      // ベル
       h("button",{class:"btn", text:"🔔", onclick:()=>{ state.modalOpen = !state.modalOpen; render(); }}),
-      // SharePoint 接続ボタン（常に表示）
-      //  - 未接続：接続ボタン
-      //  - 接続中：接続中表示 + 切断ボタン
       h("div",{class:"row"},[
         (!state.isAuthed
-          ? h("button",{class:"btn primary", text:"SharePointに接続", onclick: async ()=>{
-              await loginRedirect();
-            }})
+          ? h("button",{class:"btn primary", text:"SharePointに接続", onclick: async ()=>{ await loginRedirect(); }})
           : h("div",{class:"pill", text:"SharePoint：接続中"})
         ),
         (state.isAuthed
-          ? h("button",{class:"btn danger", text:"切断", onclick: async ()=>{
-              await logoutRedirect();
-            }})
+          ? h("button",{class:"btn danger", text:"切断", onclick: async ()=>{ await logoutRedirect(); }})
           : null
         ),
       ]),
@@ -874,41 +1120,20 @@ function render(){
     const acc = getAccount();
     state.isAuthed = !!acc;
 
-    // ログイン済みなら初回に一覧を作る
     if (acc){
       await getAccessToken();
+      // 既にログイン済みで開いた場合：表示用にストレージ準備だけはする
+      await prepareStorage();
 
-      // ★ここを追加：site/drive確定 → ルート解決（検証）
-      await ensureSiteAndDrive();
-
-      // drive root が "Shared Documents" のライブラリなので、
-      // 基本は DOC_ROOT_PATH = "Q&A_Picture_and_text" がそのまま刺さる想定。
-      // ただし念のため存在確認して state.docRootPath を確定させる。
-      try {
-        await resolveDocRoot();
-      } catch (e) {
-        console.error("resolveDocRoot failed:", e);
-      }
-
-      // 「接続ボタンを押した直後のログイン復帰」のときだけ index を作る
+      // 「接続ボタン→ログイン復帰」フラグがある場合だけ index 再構築
       if (localStorage.getItem(NEED_REBUILD_KEY) === "1") {
         localStorage.removeItem(NEED_REBUILD_KEY);
         await rebuildIndex();
       }
     }
 
-    console.log("docRootPath =", state.docRootPath);
     render();
   } catch(e){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
-
-
-
-
-
-
-
-
-
