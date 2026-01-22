@@ -20,6 +20,9 @@ const FIXED_DRIVE_ID = "b!n9E0zIMvIk-6pkzClgBqevy0duCqzUZEoL4X80gNzCqLsKJMSlE1Sb
 // 権限（Writeするなら ReadWrite が必要）
 const SCOPES = ["User.Read", "Sites.ReadWrite.All"];
 
+const ITEMS_DIR = "items";
+const MEDIA_DIR = "media";
+
 // UI選択肢
 const ASKER_OPTS = ["平野さん　FCP","重川さん　宇井建設","山下さん　宇井建設","傳田さん　宇井建設","佐藤さん　エンジン","小関さん　エンジン","川名さん　エンジン","白根さん　エンジン"];
 const SECTION_OPTS = ["二重床施工前","二重床","LGS","鉄板下地","木下地","石膏ボード","長尺シート","クロス","Pタイル","玄関タイル","フローリング","墨チェック（下地）","墨チェック（点検口）"];
@@ -44,7 +47,7 @@ const state = {
   isAuthed: false,
 
   docRootPath: null,   // 実体ルート（Shared Documents等の揺れ吸収後）
-  layout: null,        // "planA" | "legacy"
+  layout: null,        // "planA" || "legacy"
 };
 
 const $app = document.getElementById("app");
@@ -442,7 +445,7 @@ async function rebuildIndex() {
 
   for (const q of qNums) {
     let j = null;
-    try { j = await downloadJson(itemPath(q)); } catch { j = null; }
+    try { j = await downloadJson(itemPathPlanA(q)); } catch { j = null; }
     if (!j) continue;
 
     // いろんなキー揺れに耐える（移行ツール差分吸収）
@@ -501,7 +504,7 @@ function normalizePhotoPaths(arr){
 
 async function loadQFull(q) {
   await resolveDocRoot();
-  const j = await downloadJson(itemPath(q));
+  const j = await downloadJson(itemPathPlanA(q));
 
   const Q = j.question || j.Q || j.q || {};
   const A = j.answer   || j.A || j.a || {};
@@ -579,8 +582,6 @@ async function createQuestion({ asker, section, text, files }) {
     const rel  = `media/Q${qid}/${name}`;
     await uploadBinary(`${rootPath()}/${rel}`, f, f.type || "application/octet-stream");
     item.question.photos.push(rel);
-    await uploadBinary(`${rootPath()}/${rel}`, f, f.type || "application/octet-stream");
-    item.question.photos.push(rel); // 相対で保持
   }
 
   await uploadJson(itemPathPlanA(q), item);
@@ -1063,5 +1064,6 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
