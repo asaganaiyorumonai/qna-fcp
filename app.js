@@ -1,9 +1,3 @@
-/* =========================
-   フロンティアQ&A - GitHub Pages版（SharePoint/PLAN_A対応）
-   - MSALでログイン → GraphでSharePointのフォルダを読み書き
-   - 新構成（PLAN_A）/旧構成（legacy）を自動検出して動作
-========================= */
-
 const TENANT_ID = "8fba5de9-6507-44de-b9b2-35abc69bb880";
 const CLIENT_ID = "329441a8-3466-4f0f-b3e1-dca0e3a0c277";
 const REDIRECT_URI = "https://asaganaiyorumonai.github.io/qna-fcp/";
@@ -1075,6 +1069,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
