@@ -101,6 +101,14 @@ const msalConfig = {
 
 let msalApp = null;
 
+async function debugListRoot() {
+  await ensureSiteAndDrive();
+  const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root/children?$top=200`);
+  const j = await res.json();
+  console.log("=== drive root children ===");
+  (j.value || []).forEach(x => console.log(x.name, x.folder ? "[folder]" : ""));
+}
+
 async function ensureMsalReady() {
   ensureMsalLoaded();
   msalApp = new msal.PublicClientApplication(msalConfig);
@@ -1044,6 +1052,7 @@ function render(){
 /* ===== boot ===== */
 (async function boot(){
   try{
+    await debugListRoot();
     await ensureMsalReady();
     const acc = getAccount();
     state.isAuthed = !!acc;
@@ -1065,6 +1074,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
