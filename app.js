@@ -213,7 +213,7 @@ async function getItemMeta(path) {
   await ensureSiteAndDrive();
   const p = encPath(path);
   // ★末尾に ":" を付けるのが重要（path-based addressing）
-  const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}:`);
+  const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}`);
   return await res.json();
 }
 
@@ -1069,6 +1069,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
