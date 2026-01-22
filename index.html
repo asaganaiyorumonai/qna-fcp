@@ -6,6 +6,9 @@
   <meta name="theme-color" content="#07070a" />
   <title>フロンティアQ&A</title>
 
+  <!-- MSAL（先にdeferで読み込む：順序保証） -->
+  <script defer src="./app.js?v=20260122_1435"></script>
+
   <style>
     :root{
       color-scheme: dark;
@@ -283,9 +286,6 @@
       .topbar .left, .topbar .right{ position:static; }
       .topbar{ justify-content:space-between; }
     }
-
-  <!-- MSAL（先にdeferで読み込む：順序保証） -->
-  <script defer src="./app.js?v=20260122_1435"></script>
   </style>
 </head>
 
@@ -293,6 +293,7 @@
   <div id="app"></div>
 </body>
 </html>
+
 
 
 
