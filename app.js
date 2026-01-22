@@ -403,9 +403,7 @@ function normalizePhotoList(list){
 // PLAN_A の1件JSONを「共通フォーマット」に寄せる（キー揺れ吸収）
 function parsePlanAItemToUnified(obj){
   // 想定される揺れを広く拾う
-  const qNo =
-    obj.qNo ?? obj.q ?? obj.questionNo ?? obj.question_no ??
-    Number(String(obj.id||"").replace(/[^\d]/g,"") || null;
+  const qnum = Number(String(obj.question_no ?? obj.questionNo ?? "").replace(/[^\d]/g,"")) || null;
 
   const qObj = obj.question || obj.q || obj.Q || {};
   const aObj = obj.answer || obj.a || obj.A || {};
@@ -1064,6 +1062,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
