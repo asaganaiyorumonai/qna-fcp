@@ -15,7 +15,7 @@ const SHAREPOINT_SITE_PATH = "shigecreator.sharepoint.com:/sites/allcompany";
 const DOC_ROOT_PATH = "Q&A_Picture_and_text_PLAN_A";
 
 // ★DriveIDが確実に取れているなら固定推奨（site->drive自動取得がコケても動く）
-const FIXED_DRIVE_ID = "";
+const FIXED_DRIVE_ID = "b!n9E0zIMvIk-6pkzClgBqevy0duCqzUZEoL4X80gNzCqLsKJMSlE1SbR6zVXJD4PG";
 
 // 権限（Writeするなら ReadWrite が必要）
 const SCOPES = ["User.Read", "Sites.ReadWrite.All"];
@@ -1065,6 +1065,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
