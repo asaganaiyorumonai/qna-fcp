@@ -405,7 +405,7 @@ function parsePlanAItemToUnified(obj){
   // 想定される揺れを広く拾う
   const qNo =
     obj.qNo ?? obj.q ?? obj.questionNo ?? obj.question_no ??
-    Number(String(obj.id||"").replace(/[^\d]/g,"")) || null;
+    Number(String(obj.id||"").replace(/[^\d]/g,"") || null;
 
   const qObj = obj.question || obj.q || obj.Q || {};
   const aObj = obj.answer || obj.a || obj.A || {};
@@ -1064,6 +1064,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
