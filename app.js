@@ -19,11 +19,6 @@ const RESPONDER_OPTS = ["高橋さん　SC","中村さん　SC","平野さん　
 
 const NEED_REBUILD_KEY = "qa_need_rebuild";
 
-const DRIVE_ID = "b!n9E0zIMV1k-6pkzClgBqeV9odCqzUZEoL4X80gNzCqLsKJMS1E1SbR6zVXJD4PG";
-await fetch(`https://graph.microsoft.com/v1.0/drives/${DRIVE_ID}/root/children`, {
-  headers: { Authorization: `Bearer ${accessToken}` }
-}).then(r=>r.json()).then(console.log);
-
 const state = {
   viewer: localStorage.getItem("qa_viewer") || "ゲスト",
   route: "home",
@@ -877,18 +872,32 @@ function render(){
     if (acc){
       await getAccessToken();
 
+      // ★ここを追加：site/drive確定 → ルート解決（検証）
+      await ensureSiteAndDrive();
+
+      // drive root が "Shared Documents" のライブラリなので、
+      // 基本は DOC_ROOT_PATH = "Q&A_Picture_and_text" がそのまま刺さる想定。
+      // ただし念のため存在確認して state.docRootPath を確定させる。
+      try {
+        await resolveDocRoot();
+      } catch (e) {
+        console.error("resolveDocRoot failed:", e);
+      }
+
       // 「接続ボタンを押した直後のログイン復帰」のときだけ index を作る
       if (localStorage.getItem(NEED_REBUILD_KEY) === "1") {
         localStorage.removeItem(NEED_REBUILD_KEY);
         await rebuildIndex();
       }
     }
+
     console.log("docRootPath =", state.docRootPath);
     render();
   } catch(e){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
