@@ -175,14 +175,17 @@ async function getAccessToken() {
 /* ====== Graph ====== */
 async function graphFetch(url, { method="GET", headers={}, body=null } = {}) {
   const token = await getAccessToken();
-  const res = await fetch(url, { method, headers: { "Authorization": `Bearer ${token}`, ...headers }, body });
+  const res = await fetch(url, {
+    method,
+    headers: { "Authorization": `Bearer ${token}`, ...headers },
+    body
+  });
   if (!res.ok) {
     const t = await res.text().catch(()=> "");
     throw new Error(`Graph ${res.status}: ${t}`);
   }
   return res;
 }
-function encPath(p){ return p.split("/").map(encodeURIComponent).join("/"); }
 
 /* ====== Storage bootstrap ====== */
 async function ensureSiteAndDrive() {
@@ -1062,6 +1065,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
