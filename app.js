@@ -167,15 +167,20 @@ async function graphFetch(url, { method="GET", headers={}, body=null } = {}) {
 function encPath(p){ return p.split("/").map(encodeURIComponent).join("/"); }
 
 async function ensureSiteAndDrive() {
+  // docRootPath まで決まってたら何もしない
   if (state.siteId && state.driveId && state.docRootPath) return;
 
+  // site
   const siteRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${SHAREPOINT_SITE_PATH}`);
   const site = await siteRes.json();
   state.siteId = site.id;
+
+  // drive（← driveRes を作ってから json）
+  const driveRes = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${state.siteId}/drive`);
   const drive = await driveRes.json();
   state.driveId = drive.id;
 
-  // ★これを追加
+  // 実体ルート解決（循環しない版で実行）
   await resolveDocRoot();
 
   console.log("site", site);
@@ -245,8 +250,8 @@ async function getDownloadUrl(path) {
   return j["@microsoft.graph.downloadUrl"] || null;
 }
 
-async function getItemMeta(path) {
-  await ensureSiteAndDrive();
+async function getItemMeta(path, { skipEnsure = false } = {}) {
+  if (!skipEnsure) await ensureSiteAndDrive();   // ←必要なときだけ
   const p = encPath(path);
   const res = await graphFetch(`https://graph.microsoft.com/v1.0/drives/${state.driveId}/root:/${p}`);
   return await res.json();
@@ -266,7 +271,8 @@ async function resolveDocRoot() {
   // 1) まずは候補を順に当てる
   for (const c of candidates) {
     try {
-      const meta = await getItemMeta(c);
+      // ★ここ重要：skipEnsureで循環を断つ
+      const meta = await getItemMeta(c, { skipEnsure: true });
       if (meta && meta.folder) {
         state.docRootPath = c;
         return state.docRootPath;
@@ -897,6 +903,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
