@@ -12,7 +12,7 @@ const REDIRECT_URI = "https://asaganaiyorumonai.github.io/qna-fcp/";
 const SHAREPOINT_SITE_PATH = "shigecreator.sharepoint.com:/sites/allcompany";
 
 // ★移行後のルートフォルダ名（ドキュメント直下に置いたやつ）
-const DOC_ROOT_PATH = "Q&A_Picture_and_text_PLAN A";
+const DOC_ROOT_PATH = "Q&A_Picture_and_text_PLAN_A";
 
 // ★DriveIDが確実に取れているなら固定推奨（site->drive自動取得がコケても動く）
 const FIXED_DRIVE_ID = "b!n9E0zIMvIk-6pkzClgBqevy0duCqzUZEoL4X80gNzCqLsKJMSlE1SbR6zVXJD4PG";
@@ -1074,6 +1074,7 @@ function render(){
     fatal("起動に失敗しました", String(e && (e.stack || e.message || e)));
   }
 })();
+
 
 
 
